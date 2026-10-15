@@ -173,5 +173,5 @@ Bots now use pathfinding and are smarter.
 **Update0.64** - *Commited by BlazingiceYT on 4 Sep 2026*
 Ugraded three.js version from r128 to 182
 
-Currently fixing charcter clipping in floor
+
 
