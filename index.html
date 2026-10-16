@@ -108,10 +108,10 @@
   }
 
   #fpsCounter {
-    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
-    color: #9fffb0; font-size: 12px; font-weight: bold; letter-spacing: 0.5px;
-    background: rgba(0,0,0,0.35); border-radius: 6px; padding: 3px 10px;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.9); pointer-events: none;
+    position: absolute; top: calc(1px + var(--safe-t)); left: calc(4px + var(--safe-l));
+    color: #9fffb0; font-size: 10px; font-weight: bold; letter-spacing: 0.3px;
+    background: rgba(0,0,0,0.5); border-radius: 4px; padding: 1px 6px;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.9); pointer-events: none; z-index: 20;
   }
   #fpsCounter.low { color: #ff8a5f; }
 
@@ -820,7 +820,6 @@
     <div class="row"><span>Colorblind-Friendly Colors</span><button id="colorblindToggleBtn" class="miniToggleBtn off">OFF</button></div>
     <h3 id="mobileAimHeader" style="margin-top:14px;">MOBILE AIM</h3>
     <div class="row" id="aimAssistRow"><span>Aim Assist</span><button id="aimAssistToggleBtn" class="miniToggleBtn">ON</button></div>
-    <div class="row" id="autoShootRow"><span>Auto Shoot</span><button id="autoShootToggleBtn" class="miniToggleBtn">ON</button></div>
     <button id="customizeControlsBtn">↕ Customize Control Positions</button>
     <button id="rebindKeysBtn">⌨ Rebind Keys</button>
     <h3 style="margin-top:14px;">DEBUG</h3>
@@ -1110,12 +1109,11 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     ? "Left=Move | Drag=Look | FIRE=Shoot | RELOAD=Reload | SCOPE=Aim | Slots=Switch | Bag=Inventory"
     : "WASD=Move | Mouse=Look | Click=Attack/Shoot | RightClick=Scope | Ctrl/C=Crouch | R=Reload | 1/2/3=Weapon | P=View | Tab=Inventory";
   setTimeout(()=>{ document.getElementById('instructions').style.opacity = '0'; }, 8000);
-  // Aim assist / auto shoot only make sense with touch aiming - hide the
-  // settings on desktop rather than show toggles that do nothing there.
+  // Aim assist only makes sense with touch aiming - hide the
+  // setting on desktop rather than show a toggle that does nothing there.
   if (!isMobile) {
     document.getElementById('mobileAimHeader').style.display = 'none';
     document.getElementById('aimAssistRow').style.display = 'none';
-    document.getElementById('autoShootRow').style.display = 'none';
   }
 
   // Buttons bound only to 'click' can miss taps when another finger is
@@ -1252,6 +1250,38 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   mapRoot.name = 'map-glb';
   scene.add(mapRoot);
   let mapLoaded = false;
+  // Every individual house of the .glb map (nodes named House_01, House_02,
+  // ... in map.glb), filled in by registerMapHouses() when the map loads.
+  // The Move Mode cheat uses these to pick a whole house up and put it down
+  // somewhere else (see "Map houses" in the cheats section).
+  const mapHouses = [];
+  const mapHouseMeshes = [];
+  function registerMapHouses(sceneRoot) {
+    const nodes = [];
+    sceneRoot.traverse((o) => { if (o.name && /^House_\d+$/.test(o.name)) nodes.push(o); });
+    mapRoot.updateMatrixWorld(true);
+    for (const node of nodes) {
+      // attach() = re-parent under mapRoot WITHOUT changing where the house
+      // is in the world, so from now on node.position is plain world offset.
+      mapRoot.attach(node);
+      node.updateMatrixWorld(true);
+      const meshes = [];
+      node.traverse((o) => { if (o.isMesh) meshes.push(o); });
+      const box = new THREE.Box3().setFromObject(node);
+      const house = {
+        isMap: true, node, group: node, meshes, box,
+        // pos = middle of the footprint at the house's base - the point that
+        // follows the crosshair while the house is held
+        pos: new THREE.Vector3((box.min.x + box.max.x) / 2, box.min.y, (box.min.z + box.max.z) / 2),
+        restY: box.min.y,        // where the base was originally (houses fall back down to this height)
+        heldByCheat: false, falling: false, velY: 0,
+        loot: { pickups: [], crates: [] }  // loot lying inside the house, carried along while it's moved
+      };
+      for (const m of meshes) { m.userData.mapHouse = house; mapHouseMeshes.push(m); }
+      mapHouses.push(house);
+    }
+    console.log('[map] registered ' + mapHouses.length + ' movable houses');
+  }
   // ---- map-based floor height + house loot (added by patch_map_fixes.py) ----
   const mapWalkableMeshes = [];
   const mapDownRay = new THREE.Raycaster();
@@ -1364,7 +1394,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
           }
         });
         mapLoaded = true;
-        spawnMapHouseLoot(gltf.scene);
+        registerMapHouses(gltf.scene);
+        spawnMapHouseLoot(mapRoot);
         resolve();
       }, undefined, reject);
     });
@@ -9035,7 +9066,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   bindTap(document.getElementById('invClose'), toggleInventory);
 
   // ---------- Settings panel ----------
-  const settings = { sens: 1.0, scopeSensMult: 0.35, showCorpses: true, shadows: true, renderDistLevel: 2, aimAssist: true, autoShoot: true, fov: BASE_FOV, invertY: false, colorblindMode: false, shakeAmount: 1.0, weatherMode: 'auto', crosshairShape: 'cross', crosshairSize: 22, crosshairColor: '#ffffff' };
+  const settings = { sens: 1.0, scopeSensMult: 0.35, showCorpses: true, shadows: true, renderDistLevel: 2, aimAssist: true, fov: BASE_FOV, invertY: false, colorblindMode: false, shakeAmount: 1.0, weatherMode: 'auto', crosshairShape: 'cross', crosshairSize: 22, crosshairColor: '#ffffff' };
   const settingsPanel = document.getElementById('settingsPanel');
   let settingsOpen = false;
   function toggleSettings() {
@@ -9357,12 +9388,6 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     aimAssistToggleBtn.textContent = settings.aimAssist ? 'ON' : 'OFF';
     aimAssistToggleBtn.classList.toggle('off', !settings.aimAssist);
   });
-  const autoShootToggleBtn = document.getElementById('autoShootToggleBtn');
-  bindTap(autoShootToggleBtn, () => {
-    settings.autoShoot = !settings.autoShoot;
-    autoShootToggleBtn.textContent = settings.autoShoot ? 'ON' : 'OFF';
-    autoShootToggleBtn.classList.toggle('off', !settings.autoShoot);
-  });
 
   // ---------- Cheats (debug tools, PIN-gated) ----------
   // Purely a debug aid for the developer (checking clipping/collision bugs,
@@ -9543,6 +9568,32 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     }
     return best ? { house: best, dist: bestDist } : null;
   }
+  // Map houses (the .glb map's own buildings): first try an exact hit on the
+  // house's walls/roof; if the crosshair isn't directly on a wall (e.g. it's
+  // lined up with a door/window gap, or just above the roof) fall back to
+  // "ray passes through the house's bounding box" so grabbing stays forgiving
+  // on a touchscreen.
+  const MAP_HOUSE_GRAB_RANGE = 90;
+  const _mhBox = new THREE.Box3();
+  const _mhPoint = new THREE.Vector3();
+  function cheatFindMapHouseUnderCrosshair() {
+    if (!mapHouses.length) return null;
+    const rc = new THREE.Raycaster();
+    rc.setFromCamera({ x: 0, y: 0 }, camera);
+    rc.near = 0; rc.far = MAP_HOUSE_GRAB_RANGE;
+    rc.firstHitOnly = true;
+    const hits = rc.intersectObjects(mapHouseMeshes, false);
+    if (hits.length) return { house: hits[0].object.userData.mapHouse, dist: hits[0].distance };
+    let best = null, bestDist = MAP_HOUSE_GRAB_RANGE;
+    for (const h of mapHouses) {
+      _mhBox.copy(h.box).expandByScalar(1.5);
+      if (rc.ray.intersectBox(_mhBox, _mhPoint)) {
+        const d = rc.ray.origin.distanceTo(_mhPoint);
+        if (d < bestDist) { bestDist = d; best = h; }
+      }
+    }
+    return best ? { house: best, dist: bestDist } : null;
+  }
   function cheatFindGrabTarget() {
     const rc = new THREE.Raycaster();
     rc.setFromCamera({ x: 0, y: 0 }, camera);
@@ -9552,7 +9603,12 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       const hits = rc.intersectObjects(e.hitMeshes, false);
       if (hits.length && hits[0].distance < bestEntityDist) { bestEntityDist = hits[0].distance; bestEntity = e; }
     }
-    const houseHit = cheatFindHouseUnderCrosshair();
+    // nearest house of either kind (procedural houses or the .glb map's houses)
+    let houseHit = null;
+    const procHit = cheatFindHouseUnderCrosshair();
+    if (procHit) houseHit = { house: procHit.house, dist: procHit.dist };
+    const mapHit = cheatFindMapHouseUnderCrosshair();
+    if (mapHit && (!houseHit || mapHit.dist < houseHit.dist)) houseHit = { house: mapHit.house, dist: mapHit.dist };
     if (bestEntity && (!houseHit || bestEntityDist <= houseHit.dist)) return { kind: 'entity', ref: bestEntity };
     if (houseHit) return { kind: 'house', ref: houseHit.house };
     return null;
@@ -9576,6 +9632,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     } else {
       target.ref.heldByCheat = true;
       target.ref.falling = false;
+      if (target.ref.isMap) gatherMapHouseLoot(target.ref);
       cheatState.heldHouse = target.ref;
       const dx = target.ref.pos.x - player.pos.x;
       const dy = target.ref.pos.y - (player.pos.y + player.eyeHeight);
@@ -9604,7 +9661,35 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     const originY = player.pos.y + player.eyeHeight;
     e.pos.set(player.pos.x + dir.x * dist, originY + dir.y * dist, player.pos.z + dir.z * dist);
   }
+  // Loot (weapon pickups + ammo crates) is separate data from the house's
+  // walls, so grabbing a map house collects whatever is lying inside its
+  // footprint at that moment and moves it along with the house.
+  function gatherMapHouseLoot(h) {
+    const b = h.box, pad = 0.4;
+    const inside = (x, y, z) => x >= b.min.x - pad && x <= b.max.x + pad &&
+                                z >= b.min.z - pad && z <= b.max.z + pad &&
+                                y >= b.min.y - 0.5 && y <= b.max.y + 1.0;
+    h.loot.pickups = pickups.filter(p => inside(p.x, p.y, p.z));
+    h.loot.crates = ammoCrates.filter(c => inside(c.x, c.gy, c.z));
+  }
+  const _mhDelta = new THREE.Vector3();
+  function shiftMapHouse(h, dx, dy, dz) {
+    h.node.position.x += dx; h.node.position.y += dy; h.node.position.z += dz;
+    h.node.updateMatrixWorld(true); // collision/ground raycasts use this immediately
+    h.box.translate(_mhDelta.set(dx, dy, dz));
+    h.pos.x += dx; h.pos.y += dy; h.pos.z += dz;
+    for (const p of h.loot.pickups) {
+      p.x += dx; p.y += dy; p.z += dz;
+      p.group.position.x += dx; p.group.position.y += dy; p.group.position.z += dz;
+      p.ring.position.x += dx; p.ring.position.y += dy; p.ring.position.z += dz;
+    }
+    for (const c of h.loot.crates) {
+      c.x += dx; c.z += dz; c.gy += dy;
+      setAmmoCrateVisible(c, c.active);
+    }
+  }
   function shiftHouse(h, dx, dy, dz) {
+    if (h.isMap) { shiftMapHouse(h, dx, dy, dz); return; }
     h.pos.x += dx; h.pos.y += dy; h.pos.z += dz;
     h.group.position.x += dx; h.group.position.y += dy; h.group.position.z += dz;
     for (const s of h.solids) { s.x += dx; s.z += dz; s.minY += dy; s.maxY += dy; }
@@ -9617,6 +9702,19 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     }
   }
   function updateFallingHouses(dt) {
+    for (const h of mapHouses) {
+      if (!h.falling) continue;
+      h.velY = (h.velY || 0) - 20 * dt;
+      const dy = h.velY * dt;
+      const bottomY = h.box.min.y;
+      if (bottomY + dy <= h.restY) {
+        shiftMapHouse(h, 0, h.restY - bottomY, 0); // landed: back at its original base height
+        h.falling = false;
+        h.velY = 0;
+      } else {
+        shiftMapHouse(h, 0, dy, 0);
+      }
+    }
     for (const h of houses) {
       if (!h.falling) continue;
       h.velY = (h.velY || 0) - 20 * dt;
@@ -9646,7 +9744,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     // still lets you lift a house well above head height (or push it down
     // into a dip) to see what happens, without it being able to fly off
     // into the sky (or through the floor) with no way back.
-    const groundY = terrainHeightAt(tx, tz);
+    const groundY = h.isMap ? h.restY : terrainHeightAt(tx, tz);
     ty = Math.max(groundY - 2, Math.min(groundY + 25, ty));
     shiftHouse(h, tx - h.pos.x, ty - h.pos.y, tz - h.pos.z);
   }
@@ -11190,20 +11288,15 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     }
   }
 
-  // ---------- Mobile: aim assist + auto shoot ----------
-  // Both are conveniences for touch aiming (a thumb on glass is far less
-  // precise than a mouse) - gated to isMobile and each independently
-  // toggleable from Settings. Aim assist gently pulls the crosshair the
-  // rest of the way onto a target that's already roughly under it; auto
-  // shoot fires on its own once a target is dead-center, using the exact
-  // same primaryAction() the fire button uses (so fire-rate/ammo/reload
-  // all still apply normally - this never lets a weapon fire faster or
-  // skip reloads compared to manual firing).
+  // ---------- Mobile: aim assist ----------
+  // A convenience for touch aiming (a thumb on glass is far less precise
+  // than a mouse), gated to isMobile and toggleable from Settings. Aim
+  // assist gently pulls the crosshair the rest of the way onto a target
+  // that's already roughly under it. It never fires for you - shooting is
+  // always manual (fire button).
   const AIM_ASSIST_MAX_ANGLE = 0.26; // ~15 deg - target must already be roughly on screen to get pulled in
   const AIM_ASSIST_STRENGTH = 3.2;   // higher = snappier pull toward target
-  const AUTO_SHOOT_CONE = 0.09;      // ~5 deg - how tightly centered a target must be before auto-shoot fires
   const AIM_ASSIST_RANGE = 140;
-  let autoShootActive = false;
 
   function angleDiff(a, b) {
     let d = (a - b) % (Math.PI * 2);
@@ -11231,10 +11324,9 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
 
   function updateMobileAimSystems(dt) {
-    autoShootActive = false;
     if (!isMobile || !player.alive || drop.active || matchWon) return;
     if (invOpen || settingsOpen || layoutEditMode) return;
-    if (!settings.aimAssist && !settings.autoShoot) return;
+    if (!settings.aimAssist) return;
 
     const found = findAimAssistTarget();
     if (!found) return;
@@ -11253,11 +11345,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       player.pitch = Math.max(-1.2, Math.min(1.2, player.pitch));
     }
 
-    if (settings.autoShoot && found.angle < AUTO_SHOOT_CONE) {
-      autoShootActive = true;
-      primaryAction();
-    }
-    fireBtnEl.classList.toggle('engaged', firing || autoShootActive);
+    fireBtnEl.classList.toggle('engaged', firing);
   }
 
   let minigunSpinSpeed = 0, minigunRotation = 0;
@@ -11308,7 +11396,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       meleeSwingT = Math.max(0, meleeSwingT - dt*decay);
     }
     const isMinigunActive = currentMeshType() === 'minigun';
-    const targetSpeed = (isMinigunActive && (firing || autoShootActive)) ? 42 : 0;
+    const targetSpeed = (isMinigunActive && firing) ? 42 : 0;
     minigunSpinSpeed += (targetSpeed - minigunSpinSpeed) * Math.min(1, dt*4);
     minigunRotation += minigunSpinSpeed * dt;
     if (fpMeshes.minigun.barrelCluster) fpMeshes.minigun.barrelCluster.rotation.z = minigunRotation;
