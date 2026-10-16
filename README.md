@@ -175,5 +175,9 @@ Bots now use pathfinding and are smarter.
 **Update0.64** - *Commited by BlazingiceYT on 4 Sep 2026*
 Ugraded three.js version from r128 to 182
 
-Rewriting full game now.....(15 oct)
+**Update0.65** - *Commited by Blazingice on 16 Oct 2026
+Added map.
+
+Update 0.66 
+ Fixed bugs and fps issue
 

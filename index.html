@@ -980,7 +980,8 @@
 {
   "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/"
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/",
+    "three-mesh-bvh": "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.9.15/build/index.module.js"
   }
 }
 </script>
@@ -990,6 +991,10 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
+import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
+THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
+THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
+THREE.Mesh.prototype.raycast = acceleratedRaycast;
 (function(){
   "use strict";
 
@@ -1242,19 +1247,114 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
   const collisionMeshes = [];
   const mapCollisionMeshes = [];
   const mapCollisionRaycaster = new THREE.Raycaster();
+  mapCollisionRaycaster.firstHitOnly = true;
   const mapRoot = new THREE.Group();
   mapRoot.name = 'map-glb';
   scene.add(mapRoot);
   let mapLoaded = false;
+  // ---- map-based floor height + house loot (added by patch_map_fixes.py) ----
+  const mapWalkableMeshes = [];
+  const mapDownRay = new THREE.Raycaster();
+  mapDownRay.firstHitOnly = true;
+  const _mapDownOrigin = new THREE.Vector3();
+  const _mapDownDir = new THREE.Vector3(0, -1, 0);
+  // Height of the highest surface at/below (maxY + 0.7) at this x/z. This is
+  // what lets stairs, steps, ramps and raised floors in the .glb be walked on.
+  function mapSurfaceHeightAt(x, z, maxY) {
+    if (!mapLoaded) return 0;
+    _mapDownOrigin.set(x, maxY + 0.7, z);
+    mapDownRay.set(_mapDownOrigin, _mapDownDir);
+    mapDownRay.near = 0;
+    mapDownRay.far = 1000;
+    const hit = mapDownRay.intersectObjects(mapWalkableMeshes, false)[0];
+    return hit ? hit.point.y : 0;
+  }
+  function pickMapLootType() {
+    const roll = Math.random();
+    if (roll < 0.40) {
+      const g = Math.random();
+      return g < 0.18 ? 'ak47' : (g < 0.36 ? 'smg' : (g < 0.55 ? 'shotgun' : (g < 0.74 ? 'flamethrower' : (g < 0.88 ? 'minigun' : 'sniper'))));
+    }
+    if (roll < 0.80) {
+      const t = Math.random();
+      return t < 0.4 ? 'grenade' : (t < 0.7 ? 'smokegrenade' : 'molotov');
+    }
+    const others = ['knife', 'shield', 'laser', 'scythe', 'attach_scope', 'attach_suppressor', 'attach_extmag'];
+    return others[Math.floor(Math.random() * others.length)];
+  }
+  // Finds indoor floor spots inside the map's houses (a floor with a ceiling
+  // 2.2-7 units above it, clear of walls) and drops loot on them.
+  function spawnMapHouseLoot(root) {
+    const houseRoots = [];
+    root.traverse(o => { if (o.name && /^House/i.test(o.name)) houseRoots.push(o); });
+    const boxes = houseRoots.length
+      ? houseRoots.map(h => new THREE.Box3().setFromObject(h))
+      : [new THREE.Box3().setFromObject(root)];
+    const ray = new THREE.Raycaster();
+    const down = new THREE.Vector3(0, -1, 0);
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    const TARGET = 125;
+    const spots = [];
+    let attempts = 0;
+    while (spots.length < TARGET && attempts < 8000) {
+      attempts++;
+      const box = boxes[attempts % boxes.length];
+      const x = box.min.x + Math.random() * (box.max.x - box.min.x);
+      const z = box.min.z + Math.random() * (box.max.z - box.min.z);
+      ray.set(new THREE.Vector3(x, box.max.y + 2, z), down);
+      ray.near = 0;
+      ray.far = box.max.y - box.min.y + 10;
+      const hits = ray.intersectObjects(mapWalkableMeshes, false);
+      for (let i = 1; i < hits.length; i++) {
+        const hit = hits[i];
+        if (!hit.face) continue;
+        const ny = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).y;
+        if (ny < 0.7) continue;                       // must be an upward-facing surface
+        const f = hit.point.y;
+        if (f < -0.05 || f > 14) continue;           // ground level / low platforms only (reachable)
+        if (Math.abs(mapSurfaceHeightAt(x, z, f + 0.5) - f) > 0.4) continue; // must be standable
+        const headroom = hits[i - 1].point.y - f;
+        if (headroom < 2.2 || headroom > 7) continue; // needs a ceiling = indoors
+        let clear = true;
+        for (const [dx, dz] of dirs) {
+          mapCollisionRaycaster.set(new THREE.Vector3(x, f + 0.9, z), new THREE.Vector3(dx, 0, dz));
+          mapCollisionRaycaster.near = 0;
+          mapCollisionRaycaster.far = 0.7;
+          if (mapCollisionRaycaster.intersectObjects(mapCollisionMeshes, false).length) { clear = false; break; }
+        }
+        if (!clear) continue;
+        if (spots.some(s => Math.hypot(s.x - x, s.z - z) < 5 && Math.abs(s.y - f) < 2)) continue;
+        spots.push({ x, y: f, z });
+        break;
+      }
+    }
+    const LOOT_COUNT = 90;
+    for (let i = 0; i < spots.length; i++) {
+      const s = spots[i];
+      if (i < LOOT_COUNT) {
+        spawnWeaponPickup(pickMapLootType(), s.x, s.y, s.z);
+      } else {
+        // leftover spots become ammo crates (indoors, any floor)
+        makeAmmoCrate(s.x, s.z);
+        ammoCrates[ammoCrates.length - 1].gy = s.y;
+      }
+    }
+    buildAmmoCrateInstancedMeshes(); // spawnMapAmmoCrates
+    console.log('[map] spawned ' + spots.length + ' loot pickups inside houses (' + attempts + ' attempts)');
+    if (spots.length < 10) console.warn('[map] very few indoor spots found - tell the assistant');
+  }
 
   function loadMap() {
     return new Promise((resolve, reject) => {
       new GLTFLoader().load('map.glb', (gltf) => {
         mapRoot.add(gltf.scene);
+        mapRoot.updateMatrixWorld(true);
+        gltf.scene.traverse((o) => { if (o.isMesh) mapWalkableMeshes.push(o); });
         gltf.scene.traverse((object) => {
           if (!object.isMesh) return;
           object.castShadow = true;
           object.receiveShadow = true;
+          object.geometry.computeBoundsTree();
           const bounds = new THREE.Box3().setFromObject(object);
           // The map's ground is a zero-thickness plane. It is rendered, but
           // only solid geometry participates in horizontal collision rays.
@@ -1264,6 +1364,7 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
           }
         });
         mapLoaded = true;
+        spawnMapHouseLoot(gltf.scene);
         resolve();
       }, undefined, reject);
     });
@@ -1341,7 +1442,7 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
     return Math.abs(localX - ramp.localX) <= ramp.halfWidth && localZ >= ramp.zStart && localZ <= ramp.zStart + ramp.len;
   }
   function groundHeightAt(x, z, maxY) {
-    let best = (USE_GLTF_MAP && gameMode === 'ffa') ? 0 : terrainHeightAt(x, z);
+    let best = (USE_GLTF_MAP && gameMode === 'ffa') ? mapSurfaceHeightAt(x, z, maxY) : terrainHeightAt(x, z);
     floorLoop: for (const f of floors) {
       if (Math.abs(x - f.x) <= f.hw && Math.abs(z - f.z) <= f.hd) {
         for (const r of ramps) {
@@ -2038,7 +2139,7 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
       }
     }
   }
-  scatterGrass();
+  // scatterGrass(); // grass removed
   // Called a few times a second (not every frame — chunks are wide enough
   // that the player can't cross one in a single frame) to hide any chunk
   // whose center is farther from the player than GRASS_VISIBLE_DIST. This
@@ -5882,7 +5983,9 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
   }
 
   const raycaster = new THREE.Raycaster();
+  raycaster.firstHitOnly = true;
   const losRaycaster = new THREE.Raycaster();
+  losRaycaster.firstHitOnly = true;
   const ENGAGE_RANGE = 30;
 
   // sourcePos is optional — when given and the bot is carrying a shield
@@ -7034,7 +7137,7 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
       raycaster.set(aimOrigin, dir); raycaster.far = melee.range;
       let handled = false;
       if (melee.canChopTrees) {
-        const hits = raycaster.intersectObjects([treeTrunkMesh, treeLeafMesh], false);
+        const hits = raycaster.intersectObjects([treeTrunkMesh, treeLeafMesh].filter(Boolean), false);
         if (hits.length > 0 && hits[0].instanceId !== undefined) {
           const treeRef = trees[hits[0].instanceId];
           if (treeRef && treeRef.alive) {
@@ -11025,6 +11128,7 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
   }
 
   const camRaycaster = new THREE.Raycaster();
+  camRaycaster.firstHitOnly = true;
   const camPivot = new THREE.Vector3();
   const camDesired = new THREE.Vector3();
   const camDir = new THREE.Vector3();
