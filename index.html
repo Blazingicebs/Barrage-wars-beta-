@@ -1148,7 +1148,8 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
   scene.add(sun.target);
 
   // ---------- World ----------
-  const WORLD_SIZE = 560;
+  const USE_GLTF_MAP = true;
+  const WORLD_SIZE = USE_GLTF_MAP ? 220 : 560;
   // Movement is clamped to a square centered on (boundCenterX, boundCenterZ).
   // FFA uses the big green map at the origin; zombie mode swaps these to the
   // separate city far away so players can't wander off its edge either.
@@ -1227,6 +1228,7 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
   const ground = new THREE.Mesh(groundGeo, new THREE.MeshStandardMaterial({ map: makeGroundTexture(), roughness: 1 }));
   ground.rotation.x = -Math.PI/2;
   ground.receiveShadow = true;
+  ground.visible = !USE_GLTF_MAP;
   scene.add(ground);
   // CTF/zombie ground meshes are built lazily inside their own map builders;
   // exposed here (assigned there) so Extreme can tweak wet-look roughness on
@@ -1238,6 +1240,34 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
   function addSolid(x,z,hw,hd,minY,maxY){ const s = {x,z,hw,hd,minY,maxY}; solids.push(s); return s; }
   // meshes the third-person camera / bullets / line-of-sight should not pass through
   const collisionMeshes = [];
+  const mapCollisionMeshes = [];
+  const mapCollisionRaycaster = new THREE.Raycaster();
+  const mapRoot = new THREE.Group();
+  mapRoot.name = 'map-glb';
+  scene.add(mapRoot);
+  let mapLoaded = false;
+
+  function loadMap() {
+    return new Promise((resolve, reject) => {
+      new GLTFLoader().load('map.glb', (gltf) => {
+        mapRoot.add(gltf.scene);
+        gltf.scene.traverse((object) => {
+          if (!object.isMesh) return;
+          object.castShadow = true;
+          object.receiveShadow = true;
+          const bounds = new THREE.Box3().setFromObject(object);
+          // The map's ground is a zero-thickness plane. It is rendered, but
+          // only solid geometry participates in horizontal collision rays.
+          if (bounds.max.y - bounds.min.y > 0.2) {
+            mapCollisionMeshes.push(object);
+            collisionMeshes.push(object);
+          }
+        });
+        mapLoaded = true;
+        resolve();
+      }, undefined, reject);
+    });
+  }
 
   function resolveCollisions(pos, radius, footY) {
     for (const b of solids) {
@@ -1251,6 +1281,24 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
         const push = (radius - dist);
         pos.x += (dx/dist) * push;
         pos.z += (dz/dist) * push;
+      }
+    }
+    if (mapLoaded && gameMode === 'ffa') {
+      const rayY = footY + 0.9;
+      const directions = [
+        [1, 0], [-1, 0], [0, 1], [0, -1],
+        [0.707, 0.707], [-0.707, 0.707], [0.707, -0.707], [-0.707, -0.707]
+      ];
+      for (const [dx, dz] of directions) {
+        mapCollisionRaycaster.set(new THREE.Vector3(pos.x, rayY, pos.z), new THREE.Vector3(dx, 0, dz));
+        mapCollisionRaycaster.near = 0;
+        mapCollisionRaycaster.far = radius;
+        const hit = mapCollisionRaycaster.intersectObjects(mapCollisionMeshes, true)[0];
+        if (hit) {
+          const push = radius - hit.distance;
+          pos.x -= dx * push;
+          pos.z -= dz * push;
+        }
       }
     }
     const half = boundHalf;
@@ -1293,7 +1341,7 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
     return Math.abs(localX - ramp.localX) <= ramp.halfWidth && localZ >= ramp.zStart && localZ <= ramp.zStart + ramp.len;
   }
   function groundHeightAt(x, z, maxY) {
-    let best = terrainHeightAt(x, z);
+    let best = (USE_GLTF_MAP && gameMode === 'ffa') ? 0 : terrainHeightAt(x, z);
     floorLoop: for (const f of floors) {
       if (Math.abs(x - f.x) <= f.hw && Math.abs(z - f.z) <= f.hd) {
         for (const r of ramps) {
@@ -10750,25 +10798,29 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
   });
 
   // ---------- World generation (order matters: houses before trees/crates) ----------
-  generateHouses();
-  generateTrees();
-  buildTreeInstancedMeshes();
-  buildTreeExtremeDetailMeshes();
-  generateAmmoCrates();
-  buildAmmoCrateInstancedMeshes();
-  generateCars();
+  if (!USE_GLTF_MAP) {
+    generateHouses();
+    generateTrees();
+    buildTreeInstancedMeshes();
+    buildTreeExtremeDetailMeshes();
+    generateAmmoCrates();
+    buildAmmoCrateInstancedMeshes();
+    generateCars();
+  }
 
   // boundary walls
-  const boundMat = new THREE.MeshStandardMaterial({ color: 0x555b61 });
-  for (const sign of [-1,1]) {
-    const g1 = new THREE.Mesh(new THREE.BoxGeometry(WORLD_SIZE, 4, 1), boundMat);
-    g1.position.set(0, 2, sign*WORLD_SIZE/2); g1.castShadow = true; scene.add(g1);
-    addSolid(0, sign*WORLD_SIZE/2, WORLD_SIZE/2, 0.5, 0, 4);
-    collisionMeshes.push(g1);
-    const g2 = new THREE.Mesh(new THREE.BoxGeometry(1, 4, WORLD_SIZE), boundMat);
-    g2.position.set(sign*WORLD_SIZE/2, 2, 0); g2.castShadow = true; scene.add(g2);
-    addSolid(sign*WORLD_SIZE/2, 0, 0.5, WORLD_SIZE/2, 0, 4);
-    collisionMeshes.push(g2);
+  if (!USE_GLTF_MAP) {
+    const boundMat = new THREE.MeshStandardMaterial({ color: 0x555b61 });
+    for (const sign of [-1,1]) {
+      const g1 = new THREE.Mesh(new THREE.BoxGeometry(WORLD_SIZE, 4, 1), boundMat);
+      g1.position.set(0, 2, sign*WORLD_SIZE/2); g1.castShadow = true; scene.add(g1);
+      addSolid(0, sign*WORLD_SIZE/2, WORLD_SIZE/2, 0.5, 0, 4);
+      collisionMeshes.push(g1);
+      const g2 = new THREE.Mesh(new THREE.BoxGeometry(1, 4, WORLD_SIZE), boundMat);
+      g2.position.set(sign*WORLD_SIZE/2, 2, 0); g2.castShadow = true; scene.add(g2);
+      addSolid(sign*WORLD_SIZE/2, 0, 0.5, WORLD_SIZE/2, 0, 4);
+      collisionMeshes.push(g2);
+    }
   }
 
   for (let i=0;i<BOT_COUNT;i++) spawnBot(i);
@@ -10776,8 +10828,18 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
   buildNavGraph(); // rebuilt now that boundary walls exist too; real match starts always rebuild this fresh anyway (see chat)
 
   updateWeaponVisibility();
-  document.getElementById('loadingText').style.display = 'none';
-  document.getElementById('modeButtons').style.display = 'flex';
+  if (!USE_GLTF_MAP) {
+    document.getElementById('loadingText').style.display = 'none';
+    document.getElementById('modeButtons').style.display = 'flex';
+  }
+  loadMap().then(() => {
+    document.getElementById('loadingText').style.display = 'none';
+    document.getElementById('modeButtons').style.display = 'flex';
+  }).catch((error) => {
+    console.error('[map] failed to load map.glb:', error);
+    const loadingText = document.getElementById('loadingText');
+    loadingText.textContent = 'Unable to load map.glb. Refresh to try again.';
+  });
 
   // ---------- Movement helpers ----------
   function getForward(yaw) { return new THREE.Vector3(0,0,-1).applyAxisAngle(new THREE.Vector3(0,1,0), yaw); }

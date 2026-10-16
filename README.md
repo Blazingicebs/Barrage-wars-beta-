@@ -2,6 +2,8 @@
 
 **UPDATE LOG**
 
+**Update 0.48** — *Uses `map.glb` for the FFA map with mesh-based collision, preserving doorway openings instead of using one solid map box.*
+
 **Update 0.1** — *Committed by BlazingiceYT on 4 Aug 2026*
 Created a basic 3D shooter using Three.js and HTML.
 
@@ -174,5 +176,4 @@ Bots now use pathfinding and are smarter.
 Ugraded three.js version from r128 to 182
 
 Rewriting full game now.....(15 oct)
-
 
