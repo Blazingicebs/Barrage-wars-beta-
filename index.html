@@ -1147,6 +1147,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   sun.shadow.camera.left = -80; sun.shadow.camera.right = 80;
   sun.shadow.camera.top = 80; sun.shadow.camera.bottom = -80;
   sun.shadow.camera.far = 300;
+  sun.shadow.normalBias = 0.08; // pushes the shadow test slightly off the surface - the main cure for striped shadow acne
   scene.add(sun);
   scene.add(sun.target);
 
@@ -1382,10 +1383,13 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
         gltf.scene.traverse((o) => { if (o.isMesh) mapWalkableMeshes.push(o); });
         gltf.scene.traverse((object) => {
           if (!object.isMesh) return;
-          object.castShadow = true;
           object.receiveShadow = true;
           object.geometry.computeBoundsTree();
           const bounds = new THREE.Box3().setFromObject(object);
+          // A flat, zero-thickness piece (the ground) must NOT cast shadows:
+          // it would shadow itself and show up as stripes ("shadow acne").
+          // Anything with real height still casts shadows as before.
+          object.castShadow = (bounds.max.y - bounds.min.y) > 0.2;
           // The map's ground is a zero-thickness plane. It is rendered, but
           // only solid geometry participates in horizontal collision rays.
           if (bounds.max.y - bounds.min.y > 0.2) {
@@ -9260,6 +9264,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     // buys you over the base shadows every other tier gets.
     sun.shadow.camera.far = extreme ? 220 : 300;
     sun.shadow.bias = extreme ? -0.0006 : -0.0009;
+    sun.shadow.normalBias = extreme ? 0.04 : 0.08;
     sun.shadow.camera.updateProjectionMatrix();
     // PCFSoftShadowMap no longer exists at the shader level in r185 (see the
     // renderer setup) — every tier gets PCFShadowMap now, so there's no
