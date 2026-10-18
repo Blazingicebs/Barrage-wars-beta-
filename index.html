@@ -10643,6 +10643,12 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       finishRebind();
       return;
     }
+    // Safari/iPadOS never sends the "key released" event for a key that is
+    // still held when Cmd (or Globe) is pressed, or when a Cmd shortcut
+    // fires - that is what left the character walking by itself. So: Cmd
+    // pressed = let go of everything, and keys pressed together with Cmd are
+    // browser shortcuts, not game input (we don't touch them at all).
+    if (e.key === 'Meta' || e.metaKey) { clearAllKeys(); return; }
     const activeTag = document.activeElement && document.activeElement.tagName;
     if (activeTag !== 'INPUT' && activeTag !== 'TEXTAREA') {
       // Without this, a hardware keyboard held down long enough (WASD to
@@ -10674,7 +10680,29 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (e.code === keyBindings.skipWave) skipWave();
     if (e.code === keyBindings.enterCar) tryEnterOrExitCar();
   });
-  window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+  window.addEventListener('keyup', (e) => {
+    if (e.key === 'Meta') { clearAllKeys(); return; }
+    keys[e.code] = false;
+  });
+  // Forget every held key. Called whenever the browser may have swallowed a
+  // "key released" event (app switch, popup, Cmd shortcut, focus change...).
+  // If a key is still physically held, its auto-repeat presses it again
+  // within a fraction of a second, so nothing is lost - a stuck key is the
+  // only thing that stays released.
+  function clearAllKeys() {
+    for (const k in keys) keys[k] = false;
+  }
+  window.addEventListener('blur', clearAllKeys);
+  window.addEventListener('pagehide', clearAllKeys);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) clearAllKeys(); });
+  document.addEventListener('pointerlockchange', () => { if (!document.pointerLockElement) clearAllKeys(); });
+  document.addEventListener('focusin', (e) => {
+    const t = e.target && e.target.tagName;
+    if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') clearAllKeys();
+  });
+  // iPadOS often drops the release of a key when the long-press popup,
+  // the app switcher or the on-screen keyboard bar appears.
+  window.addEventListener('contextmenu', clearAllKeys);
 
   function tryJump() {
     if (player.grounded && player.alive && !drop.active) {
