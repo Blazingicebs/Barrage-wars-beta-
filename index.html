@@ -1488,43 +1488,33 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
 
   // LOADUI-BEGIN
-  // ---------- Loading screen: progress bar, server check, stall warning ----------
-  // Shows how much of map.glb has downloaded, asks the server up-front whether
-  // the file is there (so "missing" and "stuck" look different), and says so
-  // plainly when no data has arrived for a while instead of sitting silent.
-  const mapLoad = { startedAt: 0, lastProgressAt: 0, loaded: 0, total: 0, stage: 'download', timer: 0, stallMs: 15000 };
+  // ---------- Map download: progress bar, automatic retry/resume, plain-English problems ----------
+  // The map (about 24 MB) is downloaded here instead of inside the 3D loader so that
+  //  - the bar shows real progress,
+  //  - a stalled connection is detected after 15 s and the download is retried,
+  //    continuing from where it stopped when the server allows it,
+  //  - when it really cannot work, the screen says what the server answered.
+  const mapLoad = { startedAt: 0, lastProgressAt: 0, loaded: 0, total: 0, stage: 'download', timer: 0, stallMs: 15000, maxTries: 6 };
   const mlEl = (id) => document.getElementById(id);
+  const mlSleep = (ms) => new Promise((r) => setTimeout(r, ms));
   function mlMB(b) { return (b / 1048576).toFixed(1); }
   function mlSet(text, detail, pct, busy, warn) {
     if (text != null) mlEl('loadingText').textContent = text;
     if (detail != null) { mlEl('loadDetail').textContent = detail; mlEl('loadDetail').className = warn ? 'warn' : ''; }
-    const bar = mlEl('loadBar'); bar.className = busy ? 'busy' : '';
+    mlEl('loadBar').className = busy ? 'busy' : '';
     if (pct != null) mlEl('loadBarFill').style.width = Math.max(0, Math.min(100, pct)) + '%';
   }
   function mapLoadStart() {
     const now = performance.now();
     mapLoad.startedAt = now; mapLoad.lastProgressAt = now; mapLoad.loaded = 0; mapLoad.total = 0; mapLoad.stage = 'download';
     mlSet('Downloading map...', 'Contacting the game server...', 0, false);
-    let ctl = null, t = 0;
-    try { ctl = new AbortController(); t = setTimeout(() => ctl.abort(), 15000); } catch (e) {}
-    fetch('map.glb', { method: 'HEAD', cache: 'no-store', signal: ctl ? ctl.signal : undefined }).then((r) => {
-      clearTimeout(t);
-      if (mapLoad.stage !== 'download' || mapLoad.loaded > 0) return;
-      const len = parseInt(r.headers.get('content-length') || '0', 10);
-      if (r.ok) mlSet(null, 'Server replied OK' + (len ? ' (' + mlMB(len) + ' MB). Starting download...' : '. Starting download...'), null, false);
-      else mlSet('Cannot find the map file', 'Server replied "' + r.status + '" for map.glb. The file may be missing from the deployment.', null, false, true);
-    }).catch(() => {
-      clearTimeout(t);
-      if (mapLoad.stage !== 'download' || mapLoad.loaded > 0) return;
-      mlSet(null, 'The game server did not answer within 15 seconds. Check your internet connection.', null, false, true);
-    });
     clearInterval(mapLoad.timer);
     mapLoad.timer = setInterval(() => {
       if (mapLoad.stage !== 'download') return;
       const quiet = performance.now() - mapLoad.lastProgressAt;
       if (quiet > mapLoad.stallMs) {
         const secs = Math.round(quiet / 1000);
-        mlSet(null, (mapLoad.loaded ? 'The download stopped ' + secs + ' s ago at ' + mlMB(mapLoad.loaded) + ' MB.' : 'No data has arrived for ' + secs + ' s.') + ' Your connection looks slow or blocked. You can keep waiting or tap Retry.', null, false, true);
+        mlSet(null, (mapLoad.loaded ? 'The download stopped ' + secs + ' s ago at ' + mlMB(mapLoad.loaded) + ' MB.' : 'No data has arrived for ' + secs + ' s.') + ' Your connection looks slow or blocked. Retrying automatically; you can also tap Retry.', null, false, true);
         mlEl('loadRetryBtn').style.display = 'block';
       }
     }, 1000);
@@ -1535,14 +1525,18 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (ev.lengthComputable && ev.total) mapLoad.total = ev.total;
     mlEl('loadRetryBtn').style.display = 'none';
     if (mapLoad.total && mapLoad.loaded >= mapLoad.total) {
-      mapLoad.stage = 'build';
-      mlSet('Building the world...', 'Download finished (' + mlMB(mapLoad.total) + ' MB). Setting up the map - this can take a few seconds on a tablet.', 100, true);
+      mapLoadBuilding();
     } else if (mapLoad.total) {
       const pct = Math.round((mapLoad.loaded / mapLoad.total) * 100);
       mlSet('Downloading map... ' + pct + '%', mlMB(mapLoad.loaded) + ' of ' + mlMB(mapLoad.total) + ' MB', pct, false);
     } else {
       mlSet('Downloading map...', mlMB(mapLoad.loaded) + ' MB downloaded', null, true);
     }
+  }
+  function mapLoadBuilding() {
+    mapLoad.stage = 'build';
+    mlEl('loadRetryBtn').style.display = 'none';
+    mlSet('Building the world...', 'Download finished (' + mlMB(mapLoad.loaded) + ' MB). Setting up the map - this can take a few seconds on a tablet.', 100, true);
   }
   function mapLoadFinish(ok, err) {
     clearInterval(mapLoad.timer); mapLoad.stage = 'done';
@@ -1551,13 +1545,63 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     mlSet('Unable to load map.glb', 'The download failed (' + msg + '). Check your connection, then tap Retry.', null, false, true);
     mlEl('loadRetryBtn').style.display = 'block';
   }
+  // Downloads map.glb and returns it as an ArrayBuffer.
+  async function mapDownload() {
+    const url = 'map.glb';
+    let chunks = [], got = 0, total = 0;
+    for (let attempt = 1; attempt <= mapLoad.maxTries; attempt++) {
+      const ctl = new AbortController();
+      let lastData = performance.now();
+      const watch = setInterval(() => { if (performance.now() - lastData > mapLoad.stallMs) ctl.abort(); }, 500);
+      try {
+        const headers = got > 0 ? { Range: 'bytes=' + got + '-' } : {};
+        const r = await fetch(url, { signal: ctl.signal, headers, cache: 'no-store' });
+        lastData = performance.now();
+        if (got > 0 && r.status === 200) { chunks = []; got = 0; }            // server ignored the resume request: start over
+        if (!r.ok) throw new Error('the server answered ' + r.status + ' for map.glb');
+        if (r.status === 206) {
+          const m = /\/(\d+)\s*$/.exec(r.headers.get('content-range') || '');
+          if (m) total = parseInt(m[1], 10);
+        } else {
+          const len = parseInt(r.headers.get('content-length') || '0', 10);
+          if (len) total = len;
+        }
+        mlSet(null, 'Server replied OK' + (total ? ' (' + mlMB(total) + ' MB).' : '.') + ' Downloading...', null, false);
+        if (r.body && r.body.getReader) {
+          const reader = r.body.getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value); got += value.length; lastData = performance.now();
+            mapLoadProgress({ loaded: got, total, lengthComputable: !!total });
+          }
+        } else {
+          const ab = await r.arrayBuffer();
+          chunks.push(new Uint8Array(ab)); got += ab.byteLength;
+          mapLoadProgress({ loaded: got, total: total || got, lengthComputable: true });
+        }
+        clearInterval(watch);
+        if (total && got < total) throw new Error('the connection closed early');
+        const out = new Uint8Array(got); let o = 0;
+        for (const c of chunks) { out.set(c, o); o += c.length; }
+        return out.buffer;
+      } catch (e) {
+        clearInterval(watch);
+        const why = e && e.name === 'AbortError' ? 'it stalled' : (e && e.message) || 'network error';
+        if (attempt >= mapLoad.maxTries || /answered 4\d\d/.test(why)) throw new Error(why);
+        mlSet(null, 'Connection problem (' + why + '). Trying again, attempt ' + (attempt + 1) + ' of ' + mapLoad.maxTries + (got ? ', continuing from ' + mlMB(got) + ' MB' : '') + '...', null, false, true);
+        mapLoad.lastProgressAt = performance.now();
+        await mlSleep(1000 * attempt);
+      }
+    }
+  }
   mlEl('loadRetryBtn').addEventListener('click', () => location.reload());
   // LOADUI-END
 
   function loadMap() {
     return new Promise((resolve, reject) => {
       mapLoadStart();
-      new GLTFLoader().load('map.glb', (gltf) => {
+      const onMapParsed = (gltf) => {
         mapRoot.add(gltf.scene);
         mapRoot.updateMatrixWorld(true);
         gltf.scene.traverse((o) => { if (o.isMesh) mapWalkableMeshes.push(o); });
@@ -1581,7 +1625,12 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
         registerMapHouses(gltf.scene);
         spawnMapHouseLoot(mapRoot);
         resolve();
-      }, mapLoadProgress, reject);
+      };
+      mapDownload().then((buffer) => {
+        mapLoadBuilding();
+        // short pause so the "Building the world..." text can paint before the heavy setup starts
+        setTimeout(() => { try { new GLTFLoader().parse(buffer, '', onMapParsed, reject); } catch (e) { reject(e); } }, 60);
+      }).catch(reject);
     });
   }
 
