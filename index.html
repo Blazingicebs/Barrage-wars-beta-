@@ -660,6 +660,14 @@
   .mpModal .mpErr { color: #ff6b6b; font-size: 12px; min-height: 16px; margin-top: 6px; text-align: center; }
   .mpModal .mpLine { font-size: 13px; margin: 6px 0; color: #dfe6ea; }
   .mpModal .mpTwo { display: flex; gap: 8px; } .mpModal .mpTwo > div { flex: 1; } .mpModal .mpTwo label { font-size: 11px; color: #9fb2bc; display: block; margin-bottom: 4px; }
+
+  /* ===== Loading screen progress bar ===== */
+  #loadBar { width: min(80vw, 420px); height: 12px; border-radius: 8px; background: rgba(255,255,255,0.14); overflow: hidden; margin: 12px auto 0; }
+  #loadBarFill { height: 100%; width: 0%; border-radius: 8px; background: linear-gradient(90deg,#ffdd55,#ff9f1a); transition: width 0.25s ease; }
+  #loadBar.busy #loadBarFill { width: 100%; background: repeating-linear-gradient(90deg,#ffdd55 0 20px,#ffb42a 20px 40px); animation: loadStripes 0.9s linear infinite; }
+  @keyframes loadStripes { from { background-position: 0 0; } to { background-position: 40px 0; } }
+  #loadDetail { color: #c9d1d9; font-size: 12px; margin: 8px auto 0; min-height: 16px; text-align: center; max-width: min(88vw, 520px); }
+  #loadDetail.warn { color: #ffb4b4; }
 </style>
 </head>
 <body>
@@ -953,6 +961,9 @@
       <div><b>B</b><br>Build Wall</div>
     </div>
     <div id="loadingText">Generating world...</div>
+    <div id="loadBar"><div id="loadBarFill"></div></div>
+    <div id="loadDetail"></div>
+    <button class="mpBtn alt" id="loadRetryBtn" style="display:none; width:auto; padding:10px 24px; margin:12px auto 0;">RETRY</button>
     <!-- TEMPORARY — purely to confirm the browser is running this exact
          file and not a cached older copy, given brightness changes weren't
          showing up across several rounds of adjustment. Safe to delete
@@ -1475,8 +1486,77 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (spots.length < 10) console.warn('[map] very few indoor spots found - tell the assistant');
   }
 
+
+  // LOADUI-BEGIN
+  // ---------- Loading screen: progress bar, server check, stall warning ----------
+  // Shows how much of map.glb has downloaded, asks the server up-front whether
+  // the file is there (so "missing" and "stuck" look different), and says so
+  // plainly when no data has arrived for a while instead of sitting silent.
+  const mapLoad = { startedAt: 0, lastProgressAt: 0, loaded: 0, total: 0, stage: 'download', timer: 0, stallMs: 15000 };
+  const mlEl = (id) => document.getElementById(id);
+  function mlMB(b) { return (b / 1048576).toFixed(1); }
+  function mlSet(text, detail, pct, busy, warn) {
+    if (text != null) mlEl('loadingText').textContent = text;
+    if (detail != null) { mlEl('loadDetail').textContent = detail; mlEl('loadDetail').className = warn ? 'warn' : ''; }
+    const bar = mlEl('loadBar'); bar.className = busy ? 'busy' : '';
+    if (pct != null) mlEl('loadBarFill').style.width = Math.max(0, Math.min(100, pct)) + '%';
+  }
+  function mapLoadStart() {
+    const now = performance.now();
+    mapLoad.startedAt = now; mapLoad.lastProgressAt = now; mapLoad.loaded = 0; mapLoad.total = 0; mapLoad.stage = 'download';
+    mlSet('Downloading map...', 'Contacting the game server...', 0, false);
+    let ctl = null, t = 0;
+    try { ctl = new AbortController(); t = setTimeout(() => ctl.abort(), 15000); } catch (e) {}
+    fetch('map.glb', { method: 'HEAD', cache: 'no-store', signal: ctl ? ctl.signal : undefined }).then((r) => {
+      clearTimeout(t);
+      if (mapLoad.stage !== 'download' || mapLoad.loaded > 0) return;
+      const len = parseInt(r.headers.get('content-length') || '0', 10);
+      if (r.ok) mlSet(null, 'Server replied OK' + (len ? ' (' + mlMB(len) + ' MB). Starting download...' : '. Starting download...'), null, false);
+      else mlSet('Cannot find the map file', 'Server replied "' + r.status + '" for map.glb. The file may be missing from the deployment.', null, false, true);
+    }).catch(() => {
+      clearTimeout(t);
+      if (mapLoad.stage !== 'download' || mapLoad.loaded > 0) return;
+      mlSet(null, 'The game server did not answer within 15 seconds. Check your internet connection.', null, false, true);
+    });
+    clearInterval(mapLoad.timer);
+    mapLoad.timer = setInterval(() => {
+      if (mapLoad.stage !== 'download') return;
+      const quiet = performance.now() - mapLoad.lastProgressAt;
+      if (quiet > mapLoad.stallMs) {
+        const secs = Math.round(quiet / 1000);
+        mlSet(null, (mapLoad.loaded ? 'The download stopped ' + secs + ' s ago at ' + mlMB(mapLoad.loaded) + ' MB.' : 'No data has arrived for ' + secs + ' s.') + ' Your connection looks slow or blocked. You can keep waiting or tap Retry.', null, false, true);
+        mlEl('loadRetryBtn').style.display = 'block';
+      }
+    }, 1000);
+  }
+  function mapLoadProgress(ev) {
+    mapLoad.lastProgressAt = performance.now();
+    mapLoad.loaded = ev.loaded || 0;
+    if (ev.lengthComputable && ev.total) mapLoad.total = ev.total;
+    mlEl('loadRetryBtn').style.display = 'none';
+    if (mapLoad.total && mapLoad.loaded >= mapLoad.total) {
+      mapLoad.stage = 'build';
+      mlSet('Building the world...', 'Download finished (' + mlMB(mapLoad.total) + ' MB). Setting up the map - this can take a few seconds on a tablet.', 100, true);
+    } else if (mapLoad.total) {
+      const pct = Math.round((mapLoad.loaded / mapLoad.total) * 100);
+      mlSet('Downloading map... ' + pct + '%', mlMB(mapLoad.loaded) + ' of ' + mlMB(mapLoad.total) + ' MB', pct, false);
+    } else {
+      mlSet('Downloading map...', mlMB(mapLoad.loaded) + ' MB downloaded', null, true);
+    }
+  }
+  function mapLoadFinish(ok, err) {
+    clearInterval(mapLoad.timer); mapLoad.stage = 'done';
+    if (ok) { mlEl('loadBar').style.display = 'none'; mlEl('loadDetail').style.display = 'none'; mlEl('loadRetryBtn').style.display = 'none'; return; }
+    const msg = (err && (err.message || err.type)) ? String(err.message || err.type) : 'unknown error';
+    mlSet('Unable to load map.glb', 'The download failed (' + msg + '). Check your connection, then tap Retry.', null, false, true);
+    mlEl('loadRetryBtn').style.display = 'block';
+  }
+  mlEl('loadRetryBtn').addEventListener('click', () => location.reload());
+  // LOADUI-END
+
   function loadMap() {
     return new Promise((resolve, reject) => {
+      mapLoadStart();
       new GLTFLoader().load('map.glb', (gltf) => {
         mapRoot.add(gltf.scene);
         mapRoot.updateMatrixWorld(true);
@@ -1501,7 +1581,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
         registerMapHouses(gltf.scene);
         spawnMapHouseLoot(mapRoot);
         resolve();
-      }, undefined, reject);
+      }, mapLoadProgress, reject);
     });
   }
 
@@ -11388,15 +11468,17 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   updateWeaponVisibility();
   if (!USE_GLTF_MAP) {
     document.getElementById('loadingText').style.display = 'none';
+    document.getElementById('loadBar').style.display = 'none';
+    document.getElementById('loadDetail').style.display = 'none';
     document.getElementById('modeButtons').style.display = 'flex';
   }
   loadMap().then(() => {
+    mapLoadFinish(true);
     document.getElementById('loadingText').style.display = 'none';
     document.getElementById('modeButtons').style.display = 'flex';
   }).catch((error) => {
     console.error('[map] failed to load map.glb:', error);
-    const loadingText = document.getElementById('loadingText');
-    loadingText.textContent = 'Unable to load map.glb. Refresh to try again.';
+    mapLoadFinish(false, error);
   });
 
   // ---------- Movement helpers ----------
