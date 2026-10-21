@@ -629,6 +629,37 @@
     color: #fff; background: rgba(0,0,0,0.4); padding: 6px 14px; border-radius: 20px;
     font-size: 11px; opacity: 1; transition: opacity 1s; max-width: 90vw; text-align: center;
   }
+
+  /* ===== Multiplayer: menu, lobby, owner admin ===== */
+  .mpCard { background: rgba(20,28,38,0.95); border: 1px solid rgba(255,255,255,0.18); border-radius: 14px; padding: 14px 16px; width: min(92vw, 420px); box-sizing: border-box; margin: 8px 0; text-align: left; }
+  .mpCard label { display: block; font-size: 11px; color: #9fb2bc; margin: 0 0 6px; letter-spacing: 1.5px; }
+  .mpInput { width: 100%; box-sizing: border-box; font-size: 18px; padding: 10px 12px; border-radius: 10px; border: 1px solid #4a5a6a; background: #10161d; color: #fff; }
+  #mpCodeInput { text-align: center; letter-spacing: 6px; text-transform: uppercase; font-weight: bold; }
+  .mpBtn { display: block; background: linear-gradient(180deg,#3a7bd5,#1e4a8f); border: none; color: #fff; font-size: 15px; font-weight: bold; letter-spacing: 1px; padding: 12px 18px; border-radius: 12px; cursor: pointer; width: 100%; margin-top: 10px; }
+  .mpBtn.alt { background: linear-gradient(180deg,#59636e,#363e47); }
+  .mpBtn.green { background: linear-gradient(180deg,#4caf50,#2a7a2e); }
+  .mpBtn.red { background: linear-gradient(180deg,#d9534f,#8f2420); }
+  .mpBtn:disabled { opacity: 0.45; cursor: default; }
+  .mpBtn:active:not(:disabled) { transform: scale(0.98); }
+  .mpBtnWrap { width: min(92vw, 420px); }
+  #mpMsg, #mpLobbyMsg { min-height: 18px; font-size: 13px; margin-top: 8px; text-align: center; max-width: min(92vw, 420px); }
+  #mpCodeBig { font-size: 40px; letter-spacing: 8px; font-weight: 800; color: #ffdd55; text-align: center; text-shadow: 0 0 16px rgba(255,180,40,0.5); }
+  .mpPlayer { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-radius: 10px; background: rgba(255,255,255,0.07); margin: 6px 0; font-size: 15px; }
+  .mpPlayer.empty { color: #7c8b99; font-style: italic; background: rgba(255,255,255,0.03); }
+  .mpPlayer .mpTag { margin-left: auto; font-size: 11px; color: #ffdd55; letter-spacing: 1px; }
+  .mpSizeRow { display: flex; gap: 8px; margin-top: 10px; }
+  .mpSizeRow button { flex: 1; padding: 10px; border-radius: 10px; border: 1px solid #4a5a6a; background: #10161d; color: #cfd8dc; font-size: 14px; font-weight: bold; cursor: pointer; }
+  .mpSizeRow button.active { background: linear-gradient(180deg,#3a7bd5,#1e4a8f); color: #fff; border-color: #7fb0ff; }
+  .mpNote { font-size: 12px; color: #9fb2bc; margin-top: 8px; }
+  .mpModal { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 45; display: none; pointer-events: auto;
+    background: rgba(10,10,15,0.97); border: 2px solid rgba(255,80,80,0.55); border-radius: 12px; padding: 16px 18px; color: #fff;
+    width: min(92vw, 340px); box-sizing: border-box; max-height: 86vh; overflow-y: auto; text-align: left; }
+  .mpModal h3 { margin: 0 0 10px; font-size: 14px; letter-spacing: 1px; color: #ff8080; text-align: center; }
+  .mpModal .mpInput { font-size: 16px; padding: 8px 10px; }
+  .mpModal .mpBtn { font-size: 13px; padding: 9px 12px; margin-top: 8px; }
+  .mpModal .mpErr { color: #ff6b6b; font-size: 12px; min-height: 16px; margin-top: 6px; text-align: center; }
+  .mpModal .mpLine { font-size: 13px; margin: 6px 0; color: #dfe6ea; }
+  .mpModal .mpTwo { display: flex; gap: 8px; } .mpModal .mpTwo > div { flex: 1; } .mpModal .mpTwo label { font-size: 11px; color: #9fb2bc; display: block; margin-bottom: 4px; }
 </style>
 </head>
 <body>
@@ -856,8 +887,37 @@
     <div class="row"><span>Wood Spawner (+100 wood)</span><button id="cheatWoodBtn">🪵 Spawn</button></div>
     <div class="row"><span>Sky Platform (build + teleport to top)</span><button id="cheatSkyPlatformBtn">☁ Spawn</button></div>
     <div class="row"><span>Force Wet Ground (Extreme puddles, instant)</span><button id="cheatWetBtn" class="miniToggleBtn off">OFF</button></div>
+    <!-- MP-CHEATROW-BEGIN -->
+    <div class="row"><span>Multiplayer Admin (owner only)</span><button id="cheatMpAdminBtn">🔒 Open</button></div>
+    <!-- MP-CHEATROW-END -->
     <button id="cheatPanelClose">Close</button>
   </div>
+
+  <!-- MP-MODALS-BEGIN -->
+  <div class="mpModal" id="mpAdminLogin">
+    <h3>ADMIN PASSWORD</h3>
+    <input id="mpAdminPass" class="mpInput" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Password">
+    <div class="mpErr" id="mpAdminLoginErr"></div>
+    <button class="mpBtn green" id="mpAdminLoginBtn">UNLOCK</button>
+    <button class="mpBtn alt" id="mpAdminLoginCancel">CANCEL</button>
+  </div>
+  <div class="mpModal" id="mpAdminPanel">
+    <h3>MULTIPLAYER ADMIN</h3>
+    <div class="mpLine" id="mpAdminState">...</div>
+    <div class="mpLine" id="mpAdminUsage"></div>
+    <div class="mpLine" id="mpAdminRooms"></div>
+    <button class="mpBtn red" id="mpAdminToggleBtn">...</button>
+    <button class="mpBtn alt" id="mpAdminKickBtn">KICK EVERYONE (close all rooms)</button>
+    <div class="mpTwo" style="margin-top:12px;">
+      <div><label for="mpAdminMaxRooms">MAX ROOMS</label><input id="mpAdminMaxRooms" class="mpInput" type="number" inputmode="numeric" min="1" max="10"></div>
+      <div><label for="mpAdminBudget">DAILY BUDGET</label><input id="mpAdminBudget" class="mpInput" type="number" inputmode="numeric" min="1000" max="95000"></div>
+    </div>
+    <button class="mpBtn" id="mpAdminSaveBtn">SAVE LIMITS</button>
+    <div class="mpErr" id="mpAdminErr"></div>
+    <button class="mpBtn alt" id="mpAdminRefreshBtn">REFRESH</button>
+    <button class="mpBtn alt" id="mpAdminCloseBtn">LOCK &amp; CLOSE</button>
+  </div>
+  <!-- MP-MODALS-END -->
 
   <div id="keybindPanel">
     <h3>KEY BINDINGS</h3>
@@ -905,12 +965,52 @@
     <div id="dbgCharDiag" style="display:none; position:fixed; top:4px; left:4px; right:4px; z-index:99999; font:11px monospace; color:#0f0; background:rgba(0,0,0,0.75); padding:4px 8px; border-radius:4px; pointer-events:none; word-break:break-all;"></div>
     <div id="modeButtons" style="display:none;">
       <button class="bigBtn" id="startBtnFFA">FREE FOR ALL</button>
+      <!-- MP-BTN-BEGIN -->
+      <button class="bigBtn" id="startBtnMP" style="background:linear-gradient(180deg,#19b6a6,#0b6b78); margin-top:10px;">TEAM BATTLE ROYALE (ONLINE)</button>
+      <!-- MP-BTN-END -->
       <button class="bigBtn" id="startBtnZombie" style="background:linear-gradient(180deg,#5fae3d,#2f6b1f); margin-top:10px;">ZOMBIE MODE</button>
       <button class="bigBtn" id="startBtnPlayground" style="background:linear-gradient(180deg,#7b61ff,#4b35a8); margin-top:10px;">PLAYGROUND</button>
       <button class="bigBtn" id="startBtnTraining" style="background:linear-gradient(180deg,#c9a15a,#8a6a3b); margin-top:10px;">TRAINING GROUND</button>
       <button class="bigBtn" id="startBtnCTF" style="background:linear-gradient(180deg,#3a7bd5,#1e4a8f); margin-top:10px;">CAPTURE THE FLAG</button>
     </div>
   </div>
+
+
+  <!-- MP-SCREENS-BEGIN -->
+  <div class="overlayScreen" id="mpMenuScreen" style="display:none;">
+    <h1 style="color:#6ff0e0;">TEAM BATTLE ROYALE</h1>
+    <p>Play online with friends as one team against bot teams. Make a room and share the code, or join a friend's room.</p>
+    <div class="mpCard">
+      <label for="mpNameInput">YOUR NAME</label>
+      <input id="mpNameInput" class="mpInput" maxlength="16" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Player">
+      <button class="mpBtn green" id="mpCreateBtn">CREATE ROOM</button>
+    </div>
+    <div class="mpCard">
+      <label for="mpCodeInput">OR JOIN WITH A ROOM CODE</label>
+      <input id="mpCodeInput" class="mpInput" maxlength="8" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" placeholder="ABCDE">
+      <button class="mpBtn" id="mpJoinBtn">JOIN ROOM</button>
+    </div>
+    <div id="mpMsg"></div>
+    <div class="mpBtnWrap"><button class="mpBtn alt" id="mpMenuBackBtn">BACK</button></div>
+  </div>
+
+  <div class="overlayScreen" id="mpLobbyScreen" style="display:none;">
+    <h1 style="color:#6ff0e0;">LOBBY</h1>
+    <div class="mpCard" style="text-align:center;">
+      <label>ROOM CODE (tell your friends)</label>
+      <div id="mpCodeBig">-----</div>
+      <button class="mpBtn alt" id="mpCopyBtn" style="display:inline-block; width:auto; padding:8px 18px; font-size:12px;">COPY CODE</button>
+    </div>
+    <div class="mpCard">
+      <label>YOUR TEAM</label>
+      <div id="mpPlayerList"></div>
+      <div id="mpSizeBox"></div>
+    </div>
+    <div class="mpBtnWrap"><button class="mpBtn green" id="mpStartBtn" disabled>START MATCH</button></div>
+    <div id="mpLobbyMsg"></div>
+    <div class="mpBtnWrap"><button class="mpBtn alt" id="mpLeaveBtn">LEAVE ROOM</button></div>
+  </div>
+  <!-- MP-SCREENS-END -->
 
   <div class="overlayScreen" id="ffaMatchmakingScreen" style="display:none;">
     <h1>FINDING PLAYERS</h1>
@@ -10923,6 +11023,230 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   const scopeBtnEl = document.getElementById('scopeBtn');
   scopeBtnEl.addEventListener('touchstart', (e) => { e.preventDefault(); toggleScope(); }, {passive:false});
   scopeBtnEl.addEventListener('mousedown', (e) => { e.preventDefault(); toggleScope(); });
+
+
+  // MP-JS-BEGIN
+  // ---------- Multiplayer: menu, lobby and owner admin panel (step 1) ----------
+  // The multiplayer server runs in the same Cloudflare Worker that hosts this page (server.js), so it is reached at this page's own address. This
+  // step only covers rooms + the lobby and the owner's admin controls; the
+  // match itself comes in later steps. The admin PASSWORD is never stored
+  // here - it is typed in and checked by the server.
+  const MP_SERVER = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'https://37a5f9f6-test.cyrus-goh.workers.dev';
+  const mp = { ws: null, you: null, code: '', leader: null, teamSize: 3, players: [], inLobby: false, hbTimer: 0, dogTimer: 0, lastMsg: 0, serverOn: null };
+  const mpEl = (id) => document.getElementById(id);
+
+  // Typing in these boxes must not trigger game hotkeys.
+  for (const id of ['mpNameInput', 'mpCodeInput', 'mpAdminPass', 'mpAdminMaxRooms', 'mpAdminBudget']) {
+    const el = mpEl(id);
+    if (!el) continue;
+    for (const ev of ['keydown', 'keyup', 'keypress']) el.addEventListener(ev, (e) => e.stopPropagation());
+  }
+
+  function mpSetMsg(text, good) {
+    for (const id of ['mpMsg', 'mpLobbyMsg']) {
+      const e = mpEl(id);
+      if (e) { e.textContent = text || ''; e.style.color = good ? '#9fe6a0' : '#ffb4b4'; }
+    }
+  }
+  function mpShow(which) { // 'none' = back to the main start screen
+    mpEl('mpMenuScreen').style.display = which === 'menu' ? 'flex' : 'none';
+    mpEl('mpLobbyScreen').style.display = which === 'lobby' ? 'flex' : 'none';
+    mpEl('startScreen').style.display = which === 'none' ? 'flex' : 'none';
+  }
+  function mpName() {
+    let n = (mpEl('mpNameInput').value || '').trim().slice(0, 16);
+    if (!n) n = 'Player';
+    try { localStorage.setItem('owc_mp_name', n); } catch (e) {}
+    return n;
+  }
+  function mpStop() {
+    clearInterval(mp.hbTimer); clearInterval(mp.dogTimer);
+    const ws = mp.ws; mp.ws = null;
+    if (ws) { ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null; try { ws.close(1000); } catch (e) {} }
+    mp.inLobby = false; mp.you = null; mp.players = [];
+  }
+  function mpMenuButtons() {
+    const off = mp.serverOn === false;
+    mpEl('mpCreateBtn').disabled = off; mpEl('mpJoinBtn').disabled = off;
+  }
+  // Drop back to the menu and say why (also used when the server closes the room).
+  function mpFatal(text) { mpStop(); mpShow('menu'); mpMenuButtons(); mpSetMsg(text); }
+
+  async function mpCheckServer() {
+    mpSetMsg('Checking the server...', true);
+    try {
+      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 7000);
+      const r = await fetch(MP_SERVER + '/mp/status', { cache: 'no-store', signal: ctl.signal });
+      clearTimeout(t);
+      const j = await r.json();
+      mp.serverOn = !!j.enabled;
+      mpMenuButtons();
+      mpSetMsg(mp.serverOn ? '' : (j.reason || 'Online play is turned off right now.'));
+    } catch (e) {
+      mp.serverOn = null; mpMenuButtons();
+      mpSetMsg('Cannot reach the multiplayer server. Check your internet / network.');
+    }
+  }
+
+  function mpConnect(query) {
+    mpStop();
+    mpSetMsg('Connecting...', true);
+    mpEl('mpCreateBtn').disabled = true; mpEl('mpJoinBtn').disabled = true;
+    const url = MP_SERVER.replace(/^http/, 'ws') + '/mp/ws?' + query;
+    let ws;
+    try { ws = new WebSocket(url); } catch (e) { mpFatal('Could not start the connection.'); return; }
+    mp.ws = ws; mp.lastMsg = Date.now();
+    const guard = setTimeout(() => { if (mp.ws === ws && !mp.inLobby) mpFatal('Could not connect. Check your internet and try again.'); }, 10000);
+    ws.onopen = () => {
+      mp.hbTimer = setInterval(() => { if (ws.readyState === 1) ws.send('{"t":"hb"}'); }, 20000);
+      mp.dogTimer = setInterval(() => { if (Date.now() - mp.lastMsg > 50000) mpFatal('Connection lost (the server stopped answering).'); }, 5000);
+    };
+    ws.onmessage = (e) => {
+      mp.lastMsg = Date.now();
+      let m; try { m = JSON.parse(e.data); } catch (x) { return; }
+      mpHandle(m);
+    };
+    ws.onclose = () => { clearTimeout(guard); if (mp.ws === ws) mpFatal(mp.inLobby ? 'Connection lost.' : 'Could not connect. Check your internet and try again.'); };
+    ws.onerror = () => {};
+  }
+
+  function mpHandle(m) {
+    if (m.t === 'welcome') { mp.you = m.you; }
+    else if (m.t === 'lobby') {
+      mp.code = m.code; mp.leader = m.leader; mp.teamSize = m.teamSize; mp.players = m.players || [];
+      if (!mp.inLobby) { mp.inLobby = true; mpShow('lobby'); mpSetMsg(''); }
+      mpRenderLobby();
+    }
+    else if (m.t === 'error') { if (!mp.inLobby) mpFatal(m.msg); else mpSetMsg(m.msg); }
+    else if (m.t === 'closed') { mpFatal(m.reason || 'The room was closed.'); }
+  }
+
+  function mpRenderLobby() {
+    mpEl('mpCodeBig').textContent = mp.code;
+    const list = mpEl('mpPlayerList'); list.textContent = '';
+    for (const p of mp.players) {
+      const row = document.createElement('div'); row.className = 'mpPlayer';
+      const nm = document.createElement('span'); nm.textContent = p.name + (p.id === mp.you ? ' (you)' : ''); row.appendChild(nm);
+      if (p.id === mp.leader) { const tg = document.createElement('span'); tg.className = 'mpTag'; tg.textContent = '👑 LEADER'; row.appendChild(tg); }
+      list.appendChild(row);
+    }
+    for (let i = mp.players.length; i < mp.teamSize; i++) {
+      const row = document.createElement('div'); row.className = 'mpPlayer empty'; row.textContent = 'Waiting for a player...'; list.appendChild(row);
+    }
+    const iLead = mp.leader === mp.you;
+    const box = mpEl('mpSizeBox'); box.textContent = '';
+    if (iLead) {
+      const row = document.createElement('div'); row.className = 'mpSizeRow';
+      for (const n of [2, 3]) {
+        const b = document.createElement('button'); b.textContent = n + ' PLAYERS'; if (mp.teamSize === n) b.className = 'active';
+        bindTap(b, () => { if (mp.ws && mp.ws.readyState === 1) mp.ws.send(JSON.stringify({ t: 'teamSize', n })); });
+        row.appendChild(b);
+      }
+      box.appendChild(row);
+      const note = document.createElement('div'); note.className = 'mpNote'; note.textContent = 'You are the leader: you pick the team size and start the match.'; box.appendChild(note);
+    } else {
+      const note = document.createElement('div'); note.className = 'mpNote'; note.textContent = 'Team size: ' + mp.teamSize + ' (the leader decides).'; box.appendChild(note);
+    }
+    const st = mpEl('mpStartBtn');
+    st.disabled = true;
+    st.textContent = iLead ? 'START MATCH (coming in the next update)' : 'WAITING FOR THE LEADER';
+  }
+
+  bindTap(mpEl('startBtnMP'), () => {
+    if (creditsOpen) toggleCredits();
+    if (settingsOpen) toggleSettings();
+    let saved = ''; try { saved = localStorage.getItem('owc_mp_name') || ''; } catch (e) {}
+    if (!mpEl('mpNameInput').value) mpEl('mpNameInput').value = saved;
+    mpShow('menu'); mpSetMsg(''); mpCheckServer();
+  });
+  bindTap(mpEl('mpMenuBackBtn'), () => { mpStop(); mpShow('none'); });
+  bindTap(mpEl('mpCreateBtn'), () => { mpConnect('create=1&size=3&name=' + encodeURIComponent(mpName())); });
+  bindTap(mpEl('mpJoinBtn'), () => {
+    const code = (mpEl('mpCodeInput').value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (code.length < 4) { mpSetMsg('Enter the room code your leader gave you.'); return; }
+    mpConnect('room=' + encodeURIComponent(code) + '&name=' + encodeURIComponent(mpName()));
+  });
+  bindTap(mpEl('mpLeaveBtn'), () => { mpStop(); mpShow('menu'); mpMenuButtons(); mpSetMsg(''); });
+  bindTap(mpEl('mpCopyBtn'), () => {
+    try { navigator.clipboard.writeText(mp.code).then(() => mpSetMsg('Code copied.', true), () => mpSetMsg('Could not copy - just read it out.')); }
+    catch (e) { mpSetMsg('Could not copy - just read it out.'); }
+  });
+
+  // ----- owner admin (hidden inside the cheat panel) -----
+  const mpAdmin = { token: '', state: null };
+  try { mpAdmin.token = sessionStorage.getItem('owc_mp_admin') || ''; } catch (e) {}
+  async function mpAdminCall(path, method, body) {
+    try {
+      const headers = { 'content-type': 'application/json' };
+      if (mpAdmin.token) headers.authorization = 'Bearer ' + mpAdmin.token;
+      const r = await fetch(MP_SERVER + path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });
+      let j = {}; try { j = await r.json(); } catch (e) {}
+      return { status: r.status, j };
+    } catch (e) { return { status: 0, j: { error: 'Cannot reach the server.' } }; }
+  }
+  function mpAdminForget() { mpAdmin.token = ''; try { sessionStorage.removeItem('owc_mp_admin'); } catch (e) {} }
+  async function mpAdminOpen() {
+    if (mpAdmin.token) {
+      const r = await mpAdminCall('/mp/admin/status');
+      if (r.status === 200 && r.j.ok) { mpAdminRender(r.j); return; }
+      mpAdminForget();
+    }
+    mpEl('mpAdminPanel').style.display = 'none';
+    mpEl('mpAdminPass').value = ''; mpEl('mpAdminLoginErr').textContent = '';
+    mpEl('mpAdminLogin').style.display = 'block';
+    setTimeout(() => { try { mpEl('mpAdminPass').focus(); } catch (e) {} }, 50);
+  }
+  async function mpAdminLoginSubmit() {
+    const pw = mpEl('mpAdminPass').value;
+    if (!pw) return;
+    mpEl('mpAdminLoginErr').textContent = 'Checking...';
+    const r = await mpAdminCall('/mp/admin/login', 'POST', { password: pw });
+    mpEl('mpAdminPass').value = '';
+    if (r.status === 200 && r.j.ok) {
+      mpAdmin.token = r.j.token; try { sessionStorage.setItem('owc_mp_admin', r.j.token); } catch (e) {}
+      mpEl('mpAdminLogin').style.display = 'none';
+      mpAdminRefresh();
+    } else mpEl('mpAdminLoginErr').textContent = (r.j && r.j.error) || 'Could not log in.';
+  }
+  async function mpAdminRefresh() {
+    const r = await mpAdminCall('/mp/admin/status');
+    if (r.status === 200 && r.j.ok) mpAdminRender(r.j);
+    else { mpAdminForget(); mpAdminOpen(); }
+  }
+  function mpAdminRender(s) {
+    mpAdmin.state = s;
+    mpEl('mpAdminLogin').style.display = 'none';
+    mpEl('mpAdminPanel').style.display = 'block';
+    mpEl('mpAdminState').textContent = s.enabled ? 'Multiplayer is ON' : 'Multiplayer is OFF' + (s.reason ? ' - ' + s.reason : '');
+    mpEl('mpAdminState').style.color = s.enabled ? '#9fe6a0' : '#ffb4b4';
+    const pct = s.usage.budget ? Math.round((s.usage.units / s.usage.budget) * 100) : 0;
+    mpEl('mpAdminUsage').textContent = 'Used today: ' + s.usage.units + ' of ' + s.usage.budget + ' (' + pct + '%)';
+    mpEl('mpAdminRooms').textContent = s.rooms.length
+      ? 'Open rooms: ' + s.rooms.map((r) => r.code + ' (' + r.players + ' player' + (r.players === 1 ? '' : 's') + ', ' + Math.round(r.ageSeconds / 60) + ' min)').join(', ')
+      : 'No open rooms.';
+    const tb = mpEl('mpAdminToggleBtn');
+    tb.textContent = s.enabled ? 'TURN MULTIPLAYER OFF (kicks everyone)' : 'TURN MULTIPLAYER ON';
+    tb.className = 'mpBtn ' + (s.enabled ? 'red' : 'green');
+    mpEl('mpAdminMaxRooms').value = s.cfg.maxRooms; mpEl('mpAdminBudget').value = s.cfg.dailyBudget;
+    mpEl('mpAdminErr').textContent = '';
+  }
+  async function mpAdminAction(path, body) {
+    mpEl('mpAdminErr').textContent = 'Working...';
+    const r = await mpAdminCall(path, 'POST', body || {});
+    if (r.status === 200 && r.j.ok) mpAdminRender(r.j);
+    else if (r.status === 401) { mpAdminForget(); mpAdminOpen(); }
+    else mpEl('mpAdminErr').textContent = (r.j && r.j.error) || 'Request failed.';
+  }
+  bindTap(mpEl('cheatMpAdminBtn'), mpAdminOpen);
+  bindTap(mpEl('mpAdminLoginBtn'), mpAdminLoginSubmit);
+  bindTap(mpEl('mpAdminLoginCancel'), () => { mpEl('mpAdminLogin').style.display = 'none'; mpEl('mpAdminPass').value = ''; });
+  mpEl('mpAdminPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') mpAdminLoginSubmit(); });
+  bindTap(mpEl('mpAdminToggleBtn'), () => { if (mpAdmin.state) mpAdminAction('/mp/admin/enable', { enabled: !mpAdmin.state.enabled }); });
+  bindTap(mpEl('mpAdminKickBtn'), () => { mpAdminAction('/mp/admin/kickall'); });
+  bindTap(mpEl('mpAdminSaveBtn'), () => { mpAdminAction('/mp/admin/limits', { maxRooms: mpEl('mpAdminMaxRooms').value, dailyBudget: mpEl('mpAdminBudget').value }); });
+  bindTap(mpEl('mpAdminRefreshBtn'), mpAdminRefresh);
+  bindTap(mpEl('mpAdminCloseBtn'), () => { mpAdminForget(); mpEl('mpAdminPanel').style.display = 'none'; });
+  // MP-JS-END
 
   // ---------- Start / Restart ----------
   bindTap(document.getElementById('startBtnFFA'), () => {
