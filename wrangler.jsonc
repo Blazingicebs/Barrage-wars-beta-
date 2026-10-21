@@ -1,0 +1,15 @@
+{
+  "name": "barrage-wars-beta2",
+  "main": "server.js",
+  "compatibility_date": "2025-01-01",
+  "assets": { "directory": ".", "binding": "ASSETS" },
+  "durable_objects": {
+    "bindings": [
+      { "name": "CONTROL", "class_name": "Control" },
+      { "name": "ROOM", "class_name": "Room" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Control", "Room"] }
+  ]
+}
