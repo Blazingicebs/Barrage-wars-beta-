@@ -833,6 +833,9 @@
 
   <div id="settingsPanel">
     <h3>SETTINGS</h3>
+    <!-- MP-LEAVEROW-BEGIN -->
+    <div class="row" id="mpLeaveRow" style="display:none;"><span>Online match</span><button id="mpLeaveMatchBtn" class="miniToggleBtn">LEAVE</button></div>
+    <!-- MP-LEAVEROW-END -->
     <div class="row"><span>Look Sensitivity</span><input type="range" id="sensSlider" min="0.2" max="3" step="0.1" value="1"><span class="val" id="sensVal">1.0</span></div>
     <div class="row"><span>Scope Sensitivity</span><input type="range" id="scopeSensSlider" min="0.1" max="1" step="0.05" value="0.35"><span class="val" id="scopeSensVal">0.35</span></div>
     <div class="row"><span>Field of View</span><input type="range" id="fovSlider" min="60" max="110" step="1" value="70"><span class="val" id="fovVal">70</span></div>
@@ -968,7 +971,7 @@
          file and not a cached older copy, given brightness changes weren't
          showing up across several rounds of adjustment. Safe to delete
          once that's confirmed either way; doesn't affect gameplay. -->
-    <div id="dbgBuildTag" style="position:fixed; bottom:4px; left:4px; z-index:99999; font:11px monospace; color:#0f0; background:rgba(0,0,0,0.6); padding:2px 6px; border-radius:4px; pointer-events:none;">build-check: lighting-v5</div>
+    <div id="dbgBuildTag" style="position:fixed; bottom:4px; left:4px; z-index:99999; font:11px monospace; color:#0f0; background:rgba(0,0,0,0.6); padding:2px 6px; border-radius:4px; pointer-events:none;">build-check: online-match-v1</div>
     <!-- TEMPORARY — character auto-fit diagnostic, shown on screen because
          iPad Safari has no console access without a Mac to pair with.
          Take a screenshot of this once it appears (right after spawning)
@@ -1023,6 +1026,11 @@
   </div>
   <!-- MP-SCREENS-END -->
 
+  <!-- MP-MATCHUI-BEGIN -->
+  <div id="mpWait" style="display:none; position:fixed; top:14px; left:50%; transform:translateX(-50%); z-index:30; background:rgba(0,0,0,0.7); color:#fff; padding:9px 18px; border-radius:20px; font-size:14px; letter-spacing:0.5px; pointer-events:none;"></div>
+  <div id="mpNotice" style="display:none; position:fixed; top:56px; left:50%; transform:translateX(-50%); z-index:31; background:rgba(120,30,30,0.9); color:#fff; padding:9px 18px; border-radius:20px; font-size:14px; max-width:88vw; text-align:center; pointer-events:none;"></div>
+  <!-- MP-MATCHUI-END -->
+
   <div class="overlayScreen" id="ffaMatchmakingScreen" style="display:none;">
     <h1>FINDING PLAYERS</h1>
     <div class="mmSpinner"></div>
@@ -1065,6 +1073,10 @@
     </div>
     <div id="altitudeReadout" style="position:absolute; top:16px; left:50%; transform:translateX(-50%); color:#fff; background:rgba(0,0,0,0.4); padding:6px 14px; border-radius:20px; font-size:13px;">ALT: 900m</div>
     <button id="deployChuteBtn" style="position:absolute; bottom:60px; left:50%; transform:translateX(-50%); pointer-events:auto; background:linear-gradient(180deg,#3ba1ff,#1a5fbf); border:none; color:#fff; font-size:16px; font-weight:bold; padding:14px 34px; border-radius:40px; box-shadow:0 6px 16px rgba(30,100,200,0.5); display:none;">DEPLOY PARACHUTE</button>
+    <!-- MP-DROPUI-BEGIN -->
+    <button id="mpJumpBtn" style="position:absolute; bottom:60px; left:50%; transform:translateX(-50%); pointer-events:auto; background:linear-gradient(180deg,#4caf50,#2a7a2e); border:none; color:#fff; font-size:18px; font-weight:bold; letter-spacing:1px; padding:16px 44px; border-radius:40px; box-shadow:0 6px 16px rgba(30,160,60,0.5); display:none;">JUMP!</button>
+    <div id="mpDropHint" style="position:absolute; top:70px; left:50%; transform:translateX(-50%); max-width:88vw; text-align:center; color:#fff; background:rgba(0,0,0,0.55); padding:8px 16px; border-radius:16px; font-size:14px; display:none; pointer-events:none;"></div>
+    <!-- MP-DROPUI-END -->
   </div>
 
   <div id="deathCamOverlay" style="display:none;">
@@ -3948,7 +3960,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     matchStarted = true;
     drop.active = true;
     drop.t = 0;
-    drop.z = (Math.random()-0.5) * WORLD_SIZE * 0.5;
+    drop.z = mpMatch.active ? mpMatch.planeZ : (Math.random()-0.5) * WORLD_SIZE * 0.5;
     player.falling = false;
     player.chuteOpen = false;
     planeGroup.visible = true;
@@ -3968,12 +3980,15 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     player.pos.copy(planeGroup.position);
     player.velY = -2;
     document.getElementById('deployChuteBtn').style.display = 'inline-block';
+    mpAfterJump();
   }
   function deployParachute() {
     if (!player.falling || player.chuteOpen) return;
+    if (mpChuteBlocked()) return;               // online teams: only the leader opens the parachute, the others copy
     player.chuteOpen = true;
     document.getElementById('dropPrompt').style.display = 'none';
     document.getElementById('deployChuteBtn').style.display = 'none';
+    mpAfterChute();
   }
   function endDrop() {
     drop.active = false;
@@ -3990,7 +4005,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     planeGroup.position.z = drop.z;
     if (!player.falling) {
       player.pos.copy(planeGroup.position);
-      if (planeGroup.position.x > 0) jumpFromPlane();
+      if (mpPlaneAutoJump()) jumpFromPlane();
       return;
     }
     const fallSpeed = player.chuteOpen ? 5 : 32;
@@ -4659,6 +4674,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   const BOT_COUNT = 49;
   const bots = [];
   let aliveBotCount = BOT_COUNT;
+  // How many bots a match needs: normal FFA = 49; online team match = the number that fills the bot teams (see mpBotCount).
+  function ffaBotTarget() { return mpMatch.active ? mpBotCount(mpMatch.teamSize) : BOT_COUNT; }
 
   function createHealthSprite() {
     const cnv = document.createElement('canvas'); cnv.width = 128; cnv.height = 16;
@@ -8425,7 +8442,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // unchanged from what resetFFAMatch used to do in one shot, just now run
   // after the matchmaking sequence below finishes instead of immediately.
   function finishFFAMatchStart() {
-    document.getElementById('aliveCount').textContent = aliveBotCount + 1;
+    document.getElementById('aliveCount').textContent = aliveBotCount + (mpMatch.active ? mpMatch.roster.length : 1);
     matchWon = false;
     const winEl = document.getElementById('winScreen');
     winEl.style.display = 'none';
@@ -8433,7 +8450,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     winEl.querySelectorAll('.confettiPiece').forEach(el => el.remove());
     stopZone();
     respawnPlayer();
-    beginPlaneIntro();
+    if (mpMatch.active) mpReadyForGo();      // online: wait until the whole team is ready, then everyone takes off together
+    else beginPlaneIntro();
   }
   let ffaMatchmakingActive = false;
   // Shown for every FFA start — first launch, respawn after death, and
@@ -8453,7 +8471,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     const mmScreen = document.getElementById('ffaMatchmakingScreen');
     const countEl = document.getElementById('matchmakingCount');
     const statusEl = document.getElementById('matchmakingStatus');
-    const total = BOT_COUNT + 1; // + the player
+    const total = ffaBotTarget() + (mpMatch.active ? mpMatch.roster.length : 1); // + the player(s)
     // Whichever screen led here (start menu, death, or a win) needs to be
     // hidden now, not just at the end — otherwise it stacks on top of this
     // one for the whole matchmaking window instead of being replaced by it.
@@ -8474,7 +8492,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       spawned++;
       aliveBotCount++;
       countEl.textContent = (spawned + 1) + ' / ' + total;
-      if (spawned >= BOT_COUNT) {
+      if (spawned >= ffaBotTarget()) {
         clearInterval(timer);
         statusEl.textContent = 'Match ready';
         setTimeout(() => {
@@ -11199,7 +11217,14 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     mpEl('mpCreateBtn').disabled = off; mpEl('mpJoinBtn').disabled = off;
   }
   // Drop back to the menu and say why (also used when the server closes the room).
-  function mpFatal(text) { mpStop(); mpShow('menu'); mpMenuButtons(); mpSetMsg(text); }
+  function mpFatal(text) {
+    if (mpMatch.active) {                       // in a match: say why, then go back to the start screen
+      mpNotice(text + ' Going back to the menu...', 3400); mpStop();
+      setTimeout(() => location.reload(), 3500);
+      return;
+    }
+    mpStop(); mpShow('menu'); mpMenuButtons(); mpSetMsg(text);
+  }
 
   async function mpCheckServer() {
     mpSetMsg('Checking the server...', true);
@@ -11243,10 +11268,19 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (m.t === 'welcome') { mp.you = m.you; }
     else if (m.t === 'lobby') {
       mp.code = m.code; mp.leader = m.leader; mp.teamSize = m.teamSize; mp.players = m.players || [];
+      if (mpMatch.active) { mpOnRosterChange(); return; }
       if (!mp.inLobby) { mp.inLobby = true; mpShow('lobby'); mpSetMsg(''); }
       mpRenderLobby();
     }
-    else if (m.t === 'error') { if (!mp.inLobby) mpFatal(m.msg); else mpSetMsg(m.msg); }
+    else if (m.t === 'start') { mpBeginMatch(m); }
+    else if (m.t === 'go') { mpOnGo(); }
+    else if (m.t === 'p') { mpOnPose(m); }
+    else if (m.t === 'ev') { mpOnEvent(m); }
+    else if (m.t === 'error') {
+      if (mpMatch.active) mpNotice(m.msg);
+      else if (!mp.inLobby) mpFatal(m.msg);
+      else { mpSetMsg(m.msg); mpRenderLobby(); }
+    }
     else if (m.t === 'closed') { mpFatal(m.reason || 'The room was closed.'); }
   }
 
@@ -11277,8 +11311,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       const note = document.createElement('div'); note.className = 'mpNote'; note.textContent = 'Team size: ' + mp.teamSize + ' (the leader decides).'; box.appendChild(note);
     }
     const st = mpEl('mpStartBtn');
-    st.disabled = true;
-    st.textContent = iLead ? 'START MATCH (coming in the next update)' : 'WAITING FOR THE LEADER';
+    st.disabled = !iLead;
+    st.textContent = iLead ? 'START MATCH' : 'WAITING FOR THE LEADER';
   }
 
   bindTap(mpEl('startBtnMP'), () => {
@@ -11377,6 +11411,291 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   bindTap(mpEl('mpAdminCloseBtn'), () => { mpAdminForget(); mpEl('mpAdminPanel').style.display = 'none'; });
   // MP-JS-END
 
+  // MPCORE-BEGIN
+  // ---------- Multiplayer match: pure helpers (no game state; unit-tested) ----------
+  function mpRng(seed) { // small deterministic random generator: same seed -> same numbers on every device
+    let a = seed >>> 0;
+    return function () {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function mpBotTeamCount(teamSize) { return teamSize === 2 ? 24 : 15; }   // 2 players: 25 teams in total, 3 players: 16 teams
+  function mpBotCount(teamSize) { return mpBotTeamCount(teamSize) * teamSize; }
+  const MPF = { MOVING: 1, SPRINT: 2, CROUCH: 4, ALIVE: 8, FALLING: 16, CHUTE: 32, FIRING: 64, INPLANE: 128, INCAR: 256 };
+  function mpAngleLerp(a, b, t) {
+    const TAU = Math.PI * 2;
+    const d = ((((b - a + Math.PI) % TAU) + TAU) % TAU) - Math.PI;
+    return a + d * t;
+  }
+  const MP_DELAY_MS = 110;      // other players are shown this far in the past so there is always a next position to glide toward
+  const MP_EXTRAP_MS = 250;     // if updates stop, keep drifting along the last direction for at most this long, then hold still
+  const MP_TELEPORT_M = 14;     // a jump bigger than this between two updates is a respawn/teleport: snap, do not slide
+  // snaps: [{t, x, y, z, yaw, pitch, flags}] oldest -> newest, t in local milliseconds
+  function mpSample(snaps, renderT, out) {
+    const n = snaps.length;
+    if (!n) return false;
+    const last = snaps[n - 1];
+    const copy = (s) => { out.x = s.x; out.y = s.y; out.z = s.z; out.yaw = s.yaw; out.pitch = s.pitch; out.flags = s.flags; };
+    if (renderT >= last.t) {
+      let vx = 0, vy = 0, vz = 0;
+      if (n >= 2) {
+        const p = snaps[n - 2], dt = (last.t - p.t) / 1000;
+        if (dt > 0.001) {
+          vx = (last.x - p.x) / dt; vy = (last.y - p.y) / dt; vz = (last.z - p.z) / dt;
+          const sp = Math.hypot(vx, vz); if (sp > 20) { vx *= 20 / sp; vz *= 20 / sp; }
+          if (Math.abs(vy) > 60) vy = Math.sign(vy) * 60;
+          if (Math.hypot(last.x - p.x, last.z - p.z) > MP_TELEPORT_M) { vx = 0; vy = 0; vz = 0; }
+        }
+      }
+      const ex = Math.min(renderT - last.t, MP_EXTRAP_MS) / 1000;
+      copy(last); out.x += vx * ex; out.y += vy * ex; out.z += vz * ex;
+      out.speed = ex > 0.001 ? Math.hypot(vx, vz) : (n >= 2 ? Math.hypot(last.x - snaps[n - 2].x, last.z - snaps[n - 2].z) / Math.max(0.001, (last.t - snaps[n - 2].t) / 1000) : 0);
+      if (out.speed > 20) out.speed = 20;
+      return true;
+    }
+    if (renderT <= snaps[0].t) { copy(snaps[0]); out.speed = 0; return true; }
+    let i = n - 2;
+    while (i > 0 && snaps[i].t > renderT) i--;
+    const a = snaps[i], b = snaps[i + 1];
+    const span = b.t - a.t, k = span > 0 ? (renderT - a.t) / span : 1;
+    const dist = Math.hypot(b.x - a.x, b.z - a.z);
+    if (dist > MP_TELEPORT_M && span < 600) { copy(b); out.speed = 0; return true; }
+    out.x = a.x + (b.x - a.x) * k; out.y = a.y + (b.y - a.y) * k; out.z = a.z + (b.z - a.z) * k;
+    out.yaw = mpAngleLerp(a.yaw, b.yaw, k); out.pitch = a.pitch + (b.pitch - a.pitch) * k;
+    out.flags = k < 0.5 ? a.flags : b.flags;
+    out.speed = span > 0 ? dist / (span / 1000) : 0;
+    return true;
+  }
+  // Which animation clip a remote player should play.
+  function mpAnimState(flags, speed) {
+    if (!(flags & MPF.ALIVE)) return null;                      // death is a one-shot clip handled separately
+    if (flags & (MPF.FALLING | MPF.CHUTE | MPF.INPLANE)) return 'idle';
+    const moving = (flags & MPF.MOVING) && speed > 0.25;
+    if (flags & MPF.CROUCH) return moving ? 'crouchWalk' : 'crouch';
+    if (moving) return (flags & MPF.SPRINT) ? 'run' : 'walk';
+    return 'idle';
+  }
+  // Where each follower flies relative to the leader (slot 0 = leader), side by side.
+  function mpFormationOffset(slot) {
+    if (slot <= 0) return { dx: 0, dz: 0 };
+    return { dx: 0, dz: (slot % 2 === 1 ? 1 : -1) * 2.2 * Math.ceil(slot / 2) };
+  }
+  // Clock alignment: a position update carries the SENDER's clock. We keep the smallest (arrival - sender clock)
+  // seen over the last few seconds as the "no extra delay" offset, so network jitter does not make others stutter.
+  function mpClockOffset(history, arrival, senderTs) {
+    history.push(arrival - senderTs);
+    if (history.length > 90) history.shift();
+    let m = history[0];
+    for (let i = 1; i < history.length; i++) if (history[i] < m) m = history[i];
+    return m;
+  }
+  // MPCORE-END
+
+  // MPMATCH-BEGIN
+  // ---------- Multiplayer match: start together, see teammates, jump together ----------
+  // What is shared in this step: the match seed (same plane path for everyone), take-off at the same moment,
+  // each player's position / facing / stance (sent ~15 times a second and smoothed on the other side),
+  // and the leader's jump + parachute, which the rest of the team copies so you land side by side.
+  // Bots, loot, the zone and combat are still local to each device (later steps).
+  const mpMatch = { active: false, seed: 0, teamSize: 3, roster: [], matchId: 0, remotes: new Map(), phase: 'idle', goReceived: false, planeZ: 0, lastSend: 0, t0: 0, applyingRemote: false, chuteGranted: false };
+  function mpIsLeader() { return mp.leader !== null && mp.leader === mp.you; }
+  function mpSend(obj) { if (mp.ws && mp.ws.readyState === 1) { try { mp.ws.send(JSON.stringify(obj)); } catch (e) { /* closing */ } } }
+  function mpNotice(text, ms) {
+    const el = mpEl('mpNotice'); if (!el) return;
+    el.textContent = text; el.style.display = 'block';
+    clearTimeout(mpNotice.timer); mpNotice.timer = setTimeout(() => { el.style.display = 'none'; }, ms || 4000);
+  }
+  function mpDropHint(text) { const el = mpEl('mpDropHint'); if (el) { el.textContent = text || ''; el.style.display = text ? 'block' : 'none'; } }
+
+  function mpNameSprite(name) {
+    const cnv = document.createElement('canvas'); cnv.width = 256; cnv.height = 64;
+    const ctx = cnv.getContext('2d');
+    if (ctx) {
+      ctx.font = 'bold 30px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(0,0,0,0.85)'; ctx.strokeText(name, 128, 32);
+      ctx.fillStyle = '#7ff0e0'; ctx.fillText(name, 128, 32);
+    }
+    const tex = new THREE.CanvasTexture(cnv);
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+    spr.scale.set(2.2, 0.55, 1); spr.renderOrder = 10;
+    return spr;
+  }
+  function mpMakeRemote(p) {
+    const group = new THREE.Object3D();
+    const bodyM = new THREE.MeshStandardMaterial({ color: 0x2fb7a8, roughness: 0.6 }); // teammates are teal until their character model loads
+    const tor = new THREE.Mesh(humanoidTorsoGeo, bodyM); tor.position.y = 1.0; tor.castShadow = true;
+    const hd = new THREE.Mesh(humanoidHeadGeo, skinMat); hd.position.y = 1.65; hd.castShadow = true;
+    const lg = new THREE.Mesh(humanoidLegsGeo, legMat); lg.position.y = 0.45; lg.castShadow = true;
+    group.add(tor, hd, lg);
+    const tag = mpNameSprite(p.name); tag.position.y = 2.45; group.add(tag);
+    group.visible = false; scene.add(group);
+    const rp = { id: p.id, name: p.name, group, tag, bodyM, snaps: [], clock: [], out: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, flags: 0, speed: 0 }, hasOut: false, alive: true, charAnim: null };
+    loadSoldierModel((gltf) => attachCharacterModel(rp, group, [tor, hd, lg], gltf));
+    return rp;
+  }
+  function mpRemoveRemote(id) {
+    const rp = mpMatch.remotes.get(id); if (!rp) return;
+    scene.remove(rp.group);
+    if (rp.tag) { if (rp.tag.material.map) rp.tag.material.map.dispose(); rp.tag.material.dispose(); }
+    if (rp.bodyM) rp.bodyM.dispose();
+    if (rp.charAnim && rp.charAnim.mixer) { rp.charAnim.mixer.stopAllAction(); rp.charAnim.mixer.uncacheRoot(rp.charAnim.model); }
+    mpMatch.remotes.delete(id);
+  }
+  function mpClearRemotes() { for (const id of [...mpMatch.remotes.keys()]) mpRemoveRemote(id); }
+
+  // ----- starting -----
+  function mpBeginMatch(msg) {
+    if (mpMatch.active) return;
+    mpMatch.active = true; mpMatch.phase = 'starting'; mpMatch.goReceived = false;
+    mpMatch.seed = msg.seed >>> 0; mpMatch.teamSize = msg.teamSize === 2 ? 2 : 3;
+    mpMatch.roster = msg.roster || []; mpMatch.matchId = msg.matchId || 0;
+    const rng = mpRng(mpMatch.seed);
+    mpMatch.planeZ = (rng() - 0.5) * WORLD_SIZE * 0.5;      // same plane path for the whole team
+    mpClearRemotes();
+    for (const p of mpMatch.roster) if (p.id !== mp.you) mpMatch.remotes.set(p.id, mpMakeRemote(p));
+    mpEl('mpMenuScreen').style.display = 'none'; mpEl('mpLobbyScreen').style.display = 'none'; mpEl('startScreen').style.display = 'none';
+    const w = mpEl('mpWait'); w.textContent = 'Getting the match ready...'; w.style.display = 'block';
+    const lr = mpEl('mpLeaveRow'); if (lr) lr.style.display = 'flex';
+    gameMode = 'ffa';
+    try { if (!isMobile) canvas.requestPointerLock && canvas.requestPointerLock(); } catch (e) { /* needs a tap on desktop */ }
+    try { ensureAudio(); } catch (e) { /* needs a tap */ }
+    runFFAMatchmaking();           // spawns the bots, then calls mpReadyForGo() instead of taking off alone
+  }
+  function mpReadyForGo() {
+    if (mpMatch.goReceived) { mpTakeOff(); return; }
+    mpMatch.phase = 'ready';
+    mpEl('mpWait').textContent = 'Waiting for your team...';
+    mpSend({ t: 'ready' });
+  }
+  function mpOnGo() { mpMatch.goReceived = true; if (mpMatch.phase === 'ready') mpTakeOff(); }
+  function mpTakeOff() {
+    mpMatch.phase = 'playing'; mpMatch.t0 = performance.now(); mpMatch.lastSend = 0;
+    mpEl('mpWait').style.display = 'none';
+    beginPlaneIntro();
+    const lead = mpIsLeader();
+    mpEl('dropPrompt').style.display = 'none';
+    mpEl('mpJumpBtn').style.display = lead ? 'block' : 'none';
+    mpDropHint(lead ? 'You lead the team: tap JUMP when you are over your landing spot.' : 'Your leader decides when the team jumps.');
+  }
+
+  // ----- the drop: the leader decides, the team follows -----
+  function mpPlaneAutoJump() {
+    if (!mpMatch.active) return planeGroup.position.x > 0;                  // normal game: jump at the middle of the island
+    if (mpIsLeader()) return planeGroup.position.x > WORLD_SIZE * 0.55;      // leader normally jumps by button before the plane leaves the island
+    return planeGroup.position.x > WORLD_SIZE * 0.7;                         // safety net if the leader never jumps
+  }
+  function mpLeaderJump() { if (mpMatch.active && mpIsLeader() && drop.active && !player.falling) jumpFromPlane(); }
+  function mpAfterJump() {                                                   // called at the end of jumpFromPlane()
+    if (!mpMatch.active) return;
+    mpEl('mpJumpBtn').style.display = 'none';
+    if (mpIsLeader()) {
+      if (!mpMatch.applyingRemote) mpSend({ t: 'ev', k: 'jump', x: Math.round(planeGroup.position.x * 100) / 100, z: Math.round(planeGroup.position.z * 100) / 100 });
+      mpDropHint('Open your parachute when you are low enough. Your team follows you.');
+    } else {
+      mpEl('deployChuteBtn').style.display = 'none';
+      mpDropHint('Following your leader down...');
+    }
+  }
+  function mpChuteBlocked() { return mpMatch.active && !mpIsLeader() && !mpMatch.chuteGranted; }
+  function mpAfterChute() {                                                  // called when a parachute opens
+    if (!mpMatch.active) return;
+    if (mpIsLeader()) { mpSend({ t: 'ev', k: 'chute', x: 0, z: 0 }); mpDropHint('Steer to your landing spot.'); }
+    else mpDropHint('');
+  }
+  function mpFollowerLocked() { return mpMatch.active && !mpIsLeader() && drop.active && player.falling; }
+  function mpMyOffset() {
+    const present = new Set(mp.players.map((q) => q.id));
+    const followers = mpMatch.roster.filter((p) => p.id !== mp.leader && present.has(p.id));
+    const idx = followers.findIndex((p) => p.id === mp.you);
+    return mpFormationOffset(idx + 1);
+  }
+  function mpOnEvent(m) {
+    if (!mpMatch.active || mpIsLeader()) return;
+    if (m.k === 'jump') {
+      if (!drop.active || player.falling) return;
+      planeGroup.position.set(m.x, 130, m.z); drop.t = (m.x - drop.startX) / drop.speed;
+      mpMatch.applyingRemote = true; jumpFromPlane(); mpMatch.applyingRemote = false;
+      const off = mpMyOffset(); player.pos.x += off.dx; player.pos.z += off.dz;
+    } else if (m.k === 'chute') {
+      mpMatch.chuteGranted = true; deployParachute(); mpMatch.chuteGranted = false;
+    }
+  }
+  // While falling, followers glide to their place next to the leader instead of drifting on their own.
+  function mpFollowerDropTick(dt) {
+    if (!mpFollowerLocked()) return;
+    const L = mpMatch.remotes.get(mp.leader);
+    if (!L || !L.hasOut) return;
+    const off = mpMyOffset();
+    let dx = (L.out.x + off.dx - player.pos.x) * Math.min(1, 5 * dt), dz = (L.out.z + off.dz - player.pos.z) * Math.min(1, 5 * dt);
+    const lim = 45 * dt, len = Math.hypot(dx, dz);
+    if (len > lim) { dx *= lim / len; dz *= lim / len; }
+    player.pos.x += dx; player.pos.z += dz;
+  }
+
+  // ----- seeing each other -----
+  function mpOnPose(m) {
+    const rp = mpMatch.remotes.get(m.i); const d = m.d;
+    if (!rp || !Array.isArray(d) || d.length < 6) return;
+    const now = performance.now(), ts = d.length > 7 ? d[7] : now;
+    const off = mpClockOffset(rp.clock, now, ts);
+    rp.snaps.push({ t: ts + off, x: d[0], y: d[1], z: d[2], yaw: d[3], pitch: d[4], flags: d[5] | 0, hp: d[6] });
+    const n = rp.snaps.length;
+    if (n >= 2 && rp.snaps[n - 1].t < rp.snaps[n - 2].t) rp.snaps.pop();      // a late, out-of-order update: ignore
+    if (rp.snaps.length > 40) rp.snaps.shift();
+  }
+  function mpUpdateRemote(rp, now, dt) {
+    if (!mpSample(rp.snaps, now - MP_DELAY_MS, rp.out)) { rp.group.visible = false; return; }
+    rp.hasOut = true;
+    const o = rp.out;
+    rp.group.visible = !(o.flags & MPF.INPLANE);                // still inside the plane: nothing to see yet
+    rp.group.position.set(o.x, o.y, o.z);
+    rp.group.rotation.y = o.yaw;
+    const alive = (o.flags & MPF.ALIVE) !== 0;
+    if (rp.alive && !alive) { rp.alive = false; triggerCharOneShot(rp.charAnim, 'dead', { clampLast: true }); }
+    if (rp.charAnim) tickCharAnim(rp.charAnim, mpAnimState(o.flags, o.speed), dt);
+  }
+  function mpOnRosterChange() {
+    const present = new Set(mp.players.map((q) => q.id));
+    for (const id of [...mpMatch.remotes.keys()]) {
+      if (!present.has(id)) { const rp = mpMatch.remotes.get(id); mpNotice((rp ? rp.name : 'A player') + ' left the match.'); mpRemoveRemote(id); }
+    }
+    if (mpMatch.phase === 'playing' && drop.active && !player.falling && mpIsLeader()) {          // leadership may have just passed to us
+      mpEl('mpJumpBtn').style.display = 'block'; mpDropHint('You are now the team leader: tap JUMP when you are over your landing spot.');
+    }
+  }
+  function mpMatchTick(dt) {                                                  // once per frame, after the player has moved
+    if (!mpMatch.active) return;
+    const now = performance.now();
+    mpFollowerDropTick(dt);
+    if (mpMatch.phase === 'playing' && now - mpMatch.lastSend >= 66) {       // ~15 updates a second
+      mpMatch.lastSend = now;
+      let f = 0;
+      if (player.moving) f |= MPF.MOVING; if (player.sprinting) f |= MPF.SPRINT; if (player.crouching) f |= MPF.CROUCH;
+      if (player.alive) f |= MPF.ALIVE; if (player.falling) f |= MPF.FALLING; if (player.chuteOpen) f |= MPF.CHUTE;
+      if (firing) f |= MPF.FIRING; if (drop.active && !player.falling) f |= MPF.INPLANE; if (player.inCar) f |= MPF.INCAR;
+      const r2 = (v) => Math.round(v * 100) / 100;
+      mpSend({ t: 'p', d: [r2(player.pos.x), r2(player.pos.y), r2(player.pos.z), r2(player.yaw), r2(player.pitch), f, Math.max(0, Math.round(player.health)), Math.round(now - mpMatch.t0)] });
+    }
+    for (const rp of mpMatch.remotes.values()) mpUpdateRemote(rp, now, dt);
+  }
+  function mpLeaveMatch() { mpStop(); location.reload(); }                    // simplest clean way back to the menu
+
+  document.addEventListener('keydown', (e) => { if (e.code === keyBindings.jump && mpMatch.active) mpLeaderJump(); });
+  bindTap(mpEl('mpJumpBtn'), mpLeaderJump);
+  bindTap(mpEl('mpStartBtn'), () => {
+    const b = mpEl('mpStartBtn');
+    if (b.disabled || !mp.ws) return;
+    b.disabled = true; b.textContent = 'STARTING...';
+    mpSend({ t: 'start' });
+  });
+  bindTap(mpEl('mpLeaveMatchBtn'), mpLeaveMatch);
+  // MPMATCH-END
+
+
   // ---------- Start / Restart ----------
   bindTap(document.getElementById('startBtnFFA'), () => {
     if (creditsOpen) toggleCredits();
@@ -11465,6 +11784,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   });
   bindTap(document.getElementById('skipWaveBtn'), () => { skipWave(); });
   bindTap(document.getElementById('restartBtn'), () => {
+    if (mpMatch.active) { mpLeaveMatch(); return; }     // online: a unilateral restart would break the shared match
     if (!isMobile) canvas.requestPointerLock && canvas.requestPointerLock();
     if (gameMode === 'zombie') {
       resetZombieWave();
@@ -11479,6 +11799,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     }
   });
   bindTap(document.getElementById('winPlayAgainBtn'), () => {
+    if (mpMatch.active) { mpLeaveMatch(); return; }
     if (!isMobile) canvas.requestPointerLock && canvas.requestPointerLock();
     if (gameMode === 'ctf') resetCTFMatch();
     else resetFFAMatch();
@@ -11560,7 +11881,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     }
     if (drop.active) {
       let inputX = 0, inputZ = 0;
-      if (player.chuteOpen && !invOpen && !layoutEditMode) {
+      if (player.chuteOpen && !invOpen && !layoutEditMode && !mpFollowerLocked()) {
         if (keys[keyBindings.forward]) inputZ += 1;
         if (keys[keyBindings.back]) inputZ -= 1;
         if (keys[keyBindings.right]) inputX += 1;
@@ -11982,6 +12303,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
       updateDrop(dt);
       updateMovement(dt);
+      mpMatchTick(dt);
       updateCarProximity();
       if (!drop.active && matchStarted) {
         updateAmmoCratePickups();
