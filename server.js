@@ -181,6 +181,8 @@ const PAGE = `<!doctype html>
 // ============================================================================
 import { DurableObject } from 'cloudflare:workers';
 
+const SERVER_VERSION = 'online-match-v1';   // the game checks this, so an out-of-date server is spotted straight away
+
 const DEFAULT_CFG = {
   enabled: true,
   maxRooms: 3,              // rooms open at the same time
@@ -382,16 +384,23 @@ export class Control extends DurableObject {
 //
 //  Everything is rebuilt from the live sockets + a little saved info, because
 //  the object can be evicted from memory and woken up again at any time.
+//
+//  Room phases:  lobby  ->  starting (leader pressed start, everyone loads)
+//                       ->  playing  (everyone is ready, plane takes off)
 // ---------------------------------------------------------------------------
 export class Room extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this.units = 0;               // budget used since last report to Control
     this.rate = new WeakMap();    // per-socket message counter (resets if we wake up; fine)
+    this.meta = undefined;        // cached copy of the saved room info (undefined = not loaded yet)
+    this.lastPoseAt = 0;          // last time a position update came in (memory only - keeps a live match from looking idle)
   }
 
   control() { return this.env.CONTROL.get(this.env.CONTROL.idFromName('main')); }
   async cfg() { return this.control().cfg(); }
+  async loadMeta() { if (this.meta === undefined) this.meta = (await this.ctx.storage.get('meta')) || null; return this.meta; }
+  async saveMeta() { if (this.meta) await this.ctx.storage.put('meta', this.meta); }
 
   players() {
     return this.ctx.getWebSockets()
@@ -399,23 +408,26 @@ export class Room extends DurableObject {
       .filter((p) => p.a)
       .sort((x, y) => x.a.seq - y.a.seq);
   }
-  snapshot(meta) {
-    const ps = this.players();
+  livePlayers() { return this.players().filter((p) => p.ws.readyState === 1); }
+  snapshot(meta, ps) {
+    ps = ps || this.players();
     return {
-      t: 'lobby', code: meta.code, teamSize: meta.teamSize,
+      t: 'lobby', code: meta.code, teamSize: meta.teamSize, phase: meta.phase || 'lobby',
       leader: ps.length ? ps[0].a.id : null,
       players: ps.map((p) => ({ id: p.a.id, name: p.a.name })),
     };
   }
-  broadcast(obj) {
-    const s = JSON.stringify(obj);
-    for (const ws of this.ctx.getWebSockets()) { try { ws.send(s); } catch (e) { /* closing */ } }
+  broadcast(obj) { this.sendAll(JSON.stringify(obj), null); }
+  sendAll(str, except) {
+    for (const ws of this.ctx.getWebSockets()) {
+      if (ws === except) continue;
+      try { ws.send(str); } catch (e) { /* closing */ }
+    }
   }
-  async getMeta() { return this.ctx.storage.get('meta'); }
 
   async report() {
-    const meta = await this.getMeta(); if (!meta) return;
-    const n = this.players().filter((p) => p.ws.readyState === 1).length; const u = this.units; this.units = 0;
+    const meta = await this.loadMeta(); if (!meta) return;
+    const n = this.livePlayers().length; const u = this.units; this.units = 0;
     try { await this.control().roomUpdate(meta.code, n, u); } catch (e) { /* try again next time */ }
   }
 
@@ -425,28 +437,26 @@ export class Room extends DurableObject {
     const code = url.searchParams.get('code');
     const create = url.searchParams.get('create') === '1';
     const name = cleanName(url.searchParams.get('name'));
-    let meta = await this.getMeta();
+    let meta = await this.loadMeta();
     if (create && !meta) {
       const size = url.searchParams.get('size') === '2' ? 2 : 3;
-      meta = { code, teamSize: size, createdAt: Date.now(), lastActivity: Date.now(), nextSeq: 1, nextId: 1 };
-      await this.ctx.storage.put('meta', meta);
+      meta = { code, teamSize: size, createdAt: Date.now(), lastActivity: Date.now(), nextSeq: 1, nextId: 1, phase: 'lobby' };
+      this.meta = meta; await this.saveMeta();
     }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server);
+    const refuse = (close, msg) => {
+      server.send(JSON.stringify({ t: 'error', msg })); server.close(close, msg.slice(0, 100));
+      return new Response(null, { status: 101, webSocket: client });
+    };
+    if (!meta) return refuse(CLOSE.NOROOM, 'No room with that code.'); // should not happen (Worker checked with Control first)
+    if ((meta.phase || 'lobby') !== 'lobby') return refuse(CLOSE.FULL, 'That match has already started.');
+    if (this.livePlayers().length >= meta.teamSize) return refuse(CLOSE.FULL, 'That room is full.');
 
-    if (!meta) { // should not happen (Worker checked with Control first)
-      server.send(JSON.stringify({ t: 'error', msg: 'No room with that code.' }));
-      server.close(CLOSE.NOROOM, 'No room'); return new Response(null, { status: 101, webSocket: client });
-    }
-    const existing = this.players().length;
-    if (existing >= meta.teamSize) {
-      server.send(JSON.stringify({ t: 'error', msg: 'That room is full.' }));
-      server.close(CLOSE.FULL, 'Room full'); return new Response(null, { status: 101, webSocket: client });
-    }
-    const att = { id: meta.nextId, seq: meta.nextSeq, name, lastSeen: Date.now() };
+    const att = { id: meta.nextId, seq: meta.nextSeq, name, lastSeen: Date.now(), ready: false };
     meta.nextId += 1; meta.nextSeq += 1; meta.lastActivity = Date.now();
-    await this.ctx.storage.put('meta', meta);
+    await this.saveMeta();
     server.serializeAttachment(att);
     this.units += 1;
 
@@ -465,27 +475,82 @@ export class Room extends DurableObject {
     if (++r.n > 60) { try { ws.send(JSON.stringify({ t: 'closed', reason: 'Disconnected: too many messages.' })); ws.close(CLOSE.RATE, 'Too many messages'); } catch (e) {} return; }
     if (typeof message !== 'string' || message.length > 2000) return;
     let m; try { m = JSON.parse(message); } catch (e) { return; }
+    if (!m || typeof m.t !== 'string') return;
     const a = ws.deserializeAttachment(); if (!a) return;
-    a.lastSeen = now; ws.serializeAttachment(a);
+    if (now - a.lastSeen > 1000) { a.lastSeen = now; ws.serializeAttachment(a); }   // at most once a second
     if (m.t === 'hb') { ws.send('{"t":"hbr"}'); return; }
 
-    const meta = await this.getMeta(); if (!meta) return;
+    const meta = await this.loadMeta(); if (!meta) return;
+    const phase = meta.phase || 'lobby';
+
+    // ----- position updates: forwarded to everyone else, stamped with who sent it -----
+    if (m.t === 'p') {
+      if (phase !== 'playing') return;
+      const d = m.d;
+      if (!Array.isArray(d) || d.length < 6 || d.length > 10) return;
+      for (let i = 0; i < d.length; i++) if (typeof d[i] !== 'number' || !Number.isFinite(d[i]) || Math.abs(d[i]) > (i < 3 ? 100000 : 1e10)) return;   // x,y,z must be on the map; the rest (angles, flags, clock) just have to be sane numbers
+      this.lastPoseAt = now;
+      this.sendAll('{"t":"p","i":' + a.id + ',"d":' + JSON.stringify(d) + '}', ws);
+      return;
+    }
+
     meta.lastActivity = now;
-    const ps = this.players();
-    const isLeader = ps.length && ps[0].a.id === a.id;
+    const ps = this.livePlayers();
+    const isLeader = ps.length > 0 && ps[0].a.id === a.id;
+    const err = (msg) => ws.send(JSON.stringify({ t: 'error', msg }));
 
     if (m.t === 'teamSize') {
-      if (!isLeader) { ws.send(JSON.stringify({ t: 'error', msg: 'Only the leader can change team size.' })); return; }
+      if (!isLeader) return err('Only the leader can change team size.');
+      if (phase !== 'lobby') return err('You cannot change the team size during a match.');
       const n = m.n === 2 ? 2 : 3;
-      if (ps.length > n) { ws.send(JSON.stringify({ t: 'error', msg: 'Too many players in the room for a team of ' + n + '.' })); return; }
-      meta.teamSize = n; await this.ctx.storage.put('meta', meta);
-      this.broadcast(this.snapshot(meta)); return;
+      if (ps.length > n) return err('Too many players in the room for a team of ' + n + '.');
+      meta.teamSize = n; await this.saveMeta();
+      this.broadcast(this.snapshot(meta, ps)); return;
     }
     if (m.t === 'start') {
-      if (!isLeader) { ws.send(JSON.stringify({ t: 'error', msg: 'Only the leader can start the match.' })); return; }
-      ws.send(JSON.stringify({ t: 'error', msg: 'Starting a match is not built yet (next step).' })); return;
+      if (!isLeader) return err('Only the leader can start the match.');
+      if (phase !== 'lobby') return err('The match has already started.');
+      const seed = crypto.getRandomValues(new Uint32Array(1))[0];
+      meta.phase = 'starting'; meta.seed = seed; meta.startDeadline = now + 25000;
+      meta.matchId = (meta.matchId || 0) + 1;
+      for (const p of ps) { const at = p.a; at.ready = false; p.ws.serializeAttachment(at); }
+      await this.saveMeta();
+      this.broadcast({ t: 'start', seed, teamSize: meta.teamSize, matchId: meta.matchId, roster: ps.map((p) => ({ id: p.a.id, name: p.a.name })) });
+      await this.ctx.storage.setAlarm(now + 25000);   // if somebody never reports ready, go anyway
+      return;
     }
-    await this.ctx.storage.put('meta', meta);
+    if (m.t === 'ready') {
+      if (phase !== 'starting') return;
+      a.ready = true; ws.serializeAttachment(a);
+      await this.maybeGo(meta);
+      return;
+    }
+    if (m.t === 'ev') {
+      // Events from the leader that the rest of the team must copy (jump out of the plane, open the parachute).
+      if (phase !== 'playing' || !isLeader) return;
+      if (m.k !== 'jump' && m.k !== 'chute') return;
+      const x = Number.isFinite(m.x) ? m.x : 0, z = Number.isFinite(m.z) ? m.z : 0;
+      this.sendAll('{"t":"ev","k":"' + m.k + '","x":' + x + ',"z":' + z + '}', ws);
+      return;
+    }
+    if (m.t === 'toLobby') {
+      if (!isLeader) return err('Only the leader can send everyone back to the lobby.');
+      if (phase === 'lobby') return;
+      meta.phase = 'lobby'; meta.seed = undefined; await this.saveMeta();
+      for (const p of ps) { const at = p.a; at.ready = false; p.ws.serializeAttachment(at); }
+      this.broadcast({ t: 'toLobby' });
+      this.broadcast(this.snapshot(meta, ps)); return;
+    }
+  }
+
+  // Everybody loaded (or the wait ran out): take off together.
+  async maybeGo(meta, force) {
+    if ((meta.phase || 'lobby') !== 'starting') return;
+    const ps = this.livePlayers();
+    if (!force && !ps.every((p) => p.a.ready)) return;
+    meta.phase = 'playing'; meta.goAt = Date.now(); meta.lastActivity = Date.now();
+    await this.saveMeta();
+    this.broadcast({ t: 'go' });
   }
 
   async webSocketClose(ws, code, reason) {
@@ -495,15 +560,17 @@ export class Room extends DurableObject {
   async webSocketError(ws) { await this.afterLeave(); }
 
   async afterLeave() {
-    const meta = await this.getMeta(); if (!meta) return;
-    const ps = this.players().filter((p) => p.ws.readyState === 1);
+    const meta = await this.loadMeta(); if (!meta) return;
+    const ps = this.livePlayers();
     if (ps.length === 0) { await this.destroy(); return; }
-    this.broadcast({ ...this.snapshot(meta), players: ps.map((p) => ({ id: p.a.id, name: p.a.name })), leader: ps[0].a.id });
+    this.broadcast(this.snapshot(meta, ps));
+    await this.maybeGo(meta);      // the one we were waiting for may have been the one who left
     await this.report();
   }
 
   async destroy() {
-    const meta = await this.getMeta();
+    const meta = await this.loadMeta();
+    this.meta = null;
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
     if (meta) { try { await this.control().roomClosed(meta.code); } catch (e) { /* ignore */ } }
@@ -513,15 +580,18 @@ export class Room extends DurableObject {
   async shutdown(reason, code) {
     this.broadcast({ t: 'closed', reason });
     for (const ws of this.ctx.getWebSockets()) { try { ws.close(code || CLOSE.OFF, String(reason).slice(0, 100)); } catch (e) {} }
+    this.meta = null;
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
   }
 
   // Every 30s while the room exists: drop silent players, close idle rooms.
+  // (Also fires once 25 s after a match is started, to take off even if someone never finished loading.)
   async alarm() {
-    const meta = await this.getMeta(); if (!meta) return;
+    const meta = await this.loadMeta(); if (!meta) return;
     const c = await this.cfg(); const now = Date.now();
     this.units += 1;
+    if ((meta.phase || 'lobby') === 'starting' && now >= (meta.startDeadline || 0)) await this.maybeGo(meta, true);
     let dropped = false;
     for (const p of this.players()) {
       if (now - p.a.lastSeen > c.playerIdleSeconds * 1000) {
@@ -530,14 +600,15 @@ export class Room extends DurableObject {
       }
     }
     const tooOld = now - meta.createdAt > c.maxRoomSeconds * 1000;
-    const idle = now - meta.lastActivity > c.idleRoomSeconds * 1000;
+    const lastReal = Math.max(meta.lastActivity, this.lastPoseAt || 0);
+    const idle = now - lastReal > c.idleRoomSeconds * 1000;
     if (tooOld || idle) {
       this.broadcast({ t: 'closed', reason: tooOld ? 'This room reached its time limit.' : 'Room closed because nobody did anything for a while.' });
       for (const ws of this.ctx.getWebSockets()) { try { ws.close(CLOSE.IDLE, 'Room closed'); } catch (e) {} }
       await this.destroy(); return;
     }
     if (dropped) await this.afterLeave(); else await this.report();
-    if (this.ctx.getWebSockets().length > 0) await this.ctx.storage.setAlarm(Date.now() + 30000);
+    if (this.ctx.getWebSockets().length > 0) await this.ctx.storage.setAlarm(Date.now() + ((meta.phase === 'starting') ? 25000 : 30000));
   }
 }
 
@@ -570,7 +641,7 @@ export default {
     if (p === '/mp/status') {
       const now = Date.now();
       if (!statusCache.v || now - statusCache.at > 15000) { statusCache = { at: now, v: await control().getPublic() }; }
-      return json(statusCache.v);
+      return json({ ...statusCache.v, v: SERVER_VERSION });
     }
     if (p === '/mp/ws') {
       if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected a WebSocket connection', { status: 426 });
