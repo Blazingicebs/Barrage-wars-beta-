@@ -181,7 +181,7 @@ const PAGE = `<!doctype html>
 // ============================================================================
 import { DurableObject } from 'cloudflare:workers';
 
-const SERVER_VERSION = 'online-match-v1';   // the game checks this, so an out-of-date server is spotted straight away
+const SERVER_VERSION = 'online-match-v2';   // the game checks this, so an out-of-date server is spotted straight away
 
 const DEFAULT_CFG = {
   enabled: true,
@@ -473,9 +473,10 @@ export class Room extends DurableObject {
     const now = Date.now(); let r = this.rate.get(ws);
     if (!r || now - r.t > 1000) { r = { t: now, n: 0 }; this.rate.set(ws, r); }
     if (++r.n > 60) { try { ws.send(JSON.stringify({ t: 'closed', reason: 'Disconnected: too many messages.' })); ws.close(CLOSE.RATE, 'Too many messages'); } catch (e) {} return; }
-    if (typeof message !== 'string' || message.length > 2000) return;
+    if (typeof message !== 'string' || message.length > 12000) return;
     let m; try { m = JSON.parse(message); } catch (e) { return; }
     if (!m || typeof m.t !== 'string') return;
+    if (m.t !== 'b' && message.length > 2000) return;       // only the leader's bot snapshots may be big
     const a = ws.deserializeAttachment(); if (!a) return;
     if (now - a.lastSeen > 1000) { a.lastSeen = now; ws.serializeAttachment(a); }   // at most once a second
     if (m.t === 'hb') { ws.send('{"t":"hbr"}'); return; }
@@ -497,6 +498,26 @@ export class Room extends DurableObject {
     meta.lastActivity = now;
     const ps = this.livePlayers();
     const isLeader = ps.length > 0 && ps[0].a.id === a.id;
+
+    // ----- bot snapshots: only the leader's device runs the bots; everyone else just displays them -----
+    if (m.t === 'b') {
+      if (phase !== 'playing' || !isLeader) return;
+      if (!Array.isArray(m.d) || !Array.isArray(m.s) || !Number.isFinite(m.ts)) return;
+      this.lastPoseAt = now;
+      this.sendAll(message, ws);
+      return;
+    }
+    // ----- small messages between devices: to the leader, to everybody, or to one player (hits, damage, kills, match over...) -----
+    if (m.t === 'fw') {
+      if (phase !== 'playing') return;
+      if (typeof m.k !== 'string' || m.k.length > 16) return;
+      const str = '{"t":"fw","f":' + a.id + ',"k":' + JSON.stringify(m.k) + ',"d":' + JSON.stringify(m.d === undefined ? null : m.d) + '}';
+      this.lastPoseAt = now;
+      if (m.to === 'leader') { if (!isLeader && ps[0]) { try { ps[0].ws.send(str); } catch (e) {} } return; }
+      if (m.to === 'all') { this.sendAll(str, ws); return; }
+      if (Number.isInteger(m.to)) { const t = ps.find((p) => p.a.id === m.to); if (t && t.ws !== ws) { try { t.ws.send(str); } catch (e) {} } }
+      return;
+    }
     const err = (msg) => ws.send(JSON.stringify({ t: 'error', msg }));
 
     if (m.t === 'teamSize') {
