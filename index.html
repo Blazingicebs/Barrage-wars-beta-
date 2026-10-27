@@ -835,6 +835,7 @@
     <h3>SETTINGS</h3>
     <!-- MP-LEAVEROW-BEGIN -->
     <div class="row" id="mpLeaveRow" style="display:none;"><span>Online match</span><button id="mpLeaveMatchBtn" class="miniToggleBtn">LEAVE</button></div>
+    <div class="row" id="mpAdminRowMatch" style="display:none;"><span>Multiplayer admin</span><button id="mpAdminQuickBtn" class="miniToggleBtn">OPEN</button></div>
     <!-- MP-LEAVEROW-END -->
     <div class="row"><span>Look Sensitivity</span><input type="range" id="sensSlider" min="0.2" max="3" step="0.1" value="1"><span class="val" id="sensVal">1.0</span></div>
     <div class="row"><span>Scope Sensitivity</span><input type="range" id="scopeSensSlider" min="0.1" max="1" step="0.05" value="0.35"><span class="val" id="scopeSensVal">0.35</span></div>
@@ -971,7 +972,7 @@
          file and not a cached older copy, given brightness changes weren't
          showing up across several rounds of adjustment. Safe to delete
          once that's confirmed either way; doesn't affect gameplay. -->
-    <div id="dbgBuildTag" style="position:fixed; bottom:4px; left:4px; z-index:99999; font:11px monospace; color:#0f0; background:rgba(0,0,0,0.6); padding:2px 6px; border-radius:4px; pointer-events:none;">build-check: online-match-v1</div>
+    <div id="dbgBuildTag" style="position:fixed; bottom:4px; left:4px; z-index:99999; font:11px monospace; color:#0f0; background:rgba(0,0,0,0.6); padding:2px 6px; border-radius:4px; pointer-events:none;">build-check: online-match-v4</div>
     <!-- TEMPORARY — character auto-fit diagnostic, shown on screen because
          iPad Safari has no console access without a Mac to pair with.
          Take a screenshot of this once it appears (right after spawning)
@@ -1029,6 +1030,16 @@
   <!-- MP-MATCHUI-BEGIN -->
   <div id="mpWait" style="display:none; position:fixed; top:14px; left:50%; transform:translateX(-50%); z-index:30; background:rgba(0,0,0,0.7); color:#fff; padding:9px 18px; border-radius:20px; font-size:14px; letter-spacing:0.5px; pointer-events:none;"></div>
   <div id="mpNotice" style="display:none; position:fixed; top:56px; left:50%; transform:translateX(-50%); z-index:31; background:rgba(120,30,30,0.9); color:#fff; padding:9px 18px; border-radius:20px; font-size:14px; max-width:88vw; text-align:center; pointer-events:none;"></div>
+  <div class="overlayScreen" id="mpEndScreen" style="display:none; z-index:40;">
+    <h1 id="mpEndTitle"></h1>
+    <p id="mpEndSub" style="font-size:18px;"></p>
+    <p id="mpEndStats"></p>
+    <div class="mpBtnWrap"><button class="mpBtn green" id="mpPlayAgainBtn">PLAY AGAIN</button></div>
+    <div class="mpBtnWrap"><button class="mpBtn alt" id="mpEndLeaveBtn">LEAVE</button></div>
+  </div>
+  <div id="mpSpecBar" style="display:none; position:fixed; bottom:96px; left:50%; transform:translateX(-50%); z-index:30; align-items:center; gap:12px; background:rgba(0,0,0,0.7); color:#fff; padding:8px 8px 8px 18px; border-radius:26px; font-size:14px;">
+    <span id="mpSpecName"></span><button id="mpSpecNext" style="background:#2f6fd6; color:#fff; border:none; border-radius:18px; padding:8px 16px; font-weight:bold;">NEXT</button>
+  </div>
   <!-- MP-MATCHUI-END -->
 
   <div class="overlayScreen" id="ffaMatchmakingScreen" style="display:none;">
@@ -2466,6 +2477,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     // dropped weapons start non-collectible for a moment so the player who just
     // dropped it (standing right on top of it) doesn't instantly re-pick it up
     if (delayActive) setTimeout(() => { p.active = true; }, 900);
+    mpOnPickupCreated(p, type, x, y, z, delayActive, carryState);      // online: tell the others about this new pickup
     return p;
   }
   function updatePickups(dt) {
@@ -3178,14 +3190,18 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
 
   function placeStructure(pieceType, tier, pos, yaw) {
-    if (pieceType === 'wall') return placeWallPiece(pos, yaw, tier);
-    if (pieceType === 'floor') return placeFloorPiece(pos, tier);
-    if (pieceType === 'ramp') return placeRampPiece(pos, yaw, tier);
+    let entry;
+    if (pieceType === 'wall') entry = placeWallPiece(pos, yaw, tier);
+    else if (pieceType === 'floor') entry = placeFloorPiece(pos, tier);
+    else if (pieceType === 'ramp') entry = placeRampPiece(pos, yaw, tier);
+    if (entry) mpOnPiecePlaced(entry, pieceType, tier, pos, yaw);      // online: tell the others
+    return entry;
   }
 
   // destroy a built piece (used by the axe so players can never get
   // permanently blocked by something they placed themselves)
   function breakBuiltPiece(entry) {
+    mpOnPieceBroken(entry);                                            // online: tell the others
     scene.remove(entry.pivot || entry.mesh);
     const cmIdx = collisionMeshes.indexOf(entry.mesh);
     if (cmIdx !== -1) collisionMeshes.splice(cmIdx, 1);
@@ -4955,6 +4971,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (bot.chuteGroup) bot.chuteGroup.visible = false;
     if (bot.healthSprite) bot.healthSprite.visible = false;
     markCorpse(bot);
+    if (mpMatch.active) { mpOnBotKilled(bot, killedByPlayer); return; }   // online matches handle the rest themselves
     // Drop the bot's held gun (their infinite-ammo starter pistol doesn't
     // count as loot - only a picked-up primary weapon like an AK/sniper/minigun drops).
     if (bot.weaponType && bot.weaponType !== 'pistol') {
@@ -6303,6 +6320,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
   const SUPPRESSOR_DETECT_MULT = 0.55;
   function findNearestTarget(bot) {
+    if (mpMatch.active) return mpFindNearestTarget(bot);      // online team match: bots fight the real team and other bot teams
     let best = null, bestDist = ENGAGE_RANGE;
     const playerEngageR = playerHasSuppressor() ? ENGAGE_RANGE * SUPPRESSOR_DETECT_MULT : ENGAGE_RANGE;
     // CTF is team-based: red guards fight the player and the blue squad,
@@ -6426,11 +6444,13 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     const tracerColor = (weaponDef && weaponDef.muzzleColor) || 0xffe37a;
     spawnTracer(muzzlePos, endPoint, tracerColor);
     spawnMuzzleFlash(muzzlePos, tracerColor);
+    if (mpMatch.active) mpHostShot(bot, endPoint);          // let the other devices draw this shot too
 
     if (isHit) {
       const [dmgMin, dmgMax] = combat.dmg;
       const dmg = (dmgMin + Math.random()*(dmgMax - dmgMin)) * tier.dmgMult;
       if (target.isPlayer) damagePlayer(dmg, bot.pos, botDeathCamInfo(bot));
+      else if (target.isRemotePlayer) mpDamageRemote(target, dmg, bot);
       else damageBot(target, dmg, bot.pos);
     }
   }
@@ -6800,6 +6820,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (Math.random() >= hitChance) return;
     const dmg = def.bodyDmg * (0.85 + Math.random()*0.3) * tier.dmgMult;
     if (target.isPlayer) { damagePlayer(dmg, bot.pos, botDeathCamInfo(bot)); addShake(0.1); }
+    else if (target.isRemotePlayer) mpDamageRemote(target, dmg, bot);
     else damageBot(target, dmg, bot.pos);
   }
 
@@ -8264,6 +8285,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // the death cam sequence can run first and only reveal the death screen
   // once it (or a skip) finishes.
   function showDeathScreenUI() {
+    if (mpMatch.active) { mpAfterDeathCam(); return; }    // online: spectate a teammate or show the team result instead
     document.getElementById('deathScreen').style.display = 'flex';
   }
 
@@ -8488,7 +8510,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     aliveBotCount = 0;
     let spawned = 0;
     const timer = setInterval(() => {
-      spawnBot(spawned);
+      mpSpawnBot(spawned);
       spawned++;
       aliveBotCount++;
       countEl.textContent = (spawned + 1) + ' / ' + total;
@@ -8924,6 +8946,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       const d = Math.hypot(player.pos.x - zone.centerX, player.pos.z - zone.centerZ);
       if (d > zone.radius) damagePlayer(stageDps, null, { label: 'The Storm' });
     }
+    if (mpMatch.active && !mpIsHostSim()) return;         // the leader's device decides which bots the storm kills
     for (const bot of bots) {
       if (!bot.alive || bot.falling) continue;
       const d = Math.hypot(bot.pos.x - zone.centerX, bot.pos.z - zone.centerZ);
@@ -9668,6 +9691,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   const cheatPinError = document.getElementById('cheatPinError');
 
   function openCheatPanel() {
+    if (mpMatch.active) { mpNotice('Cheats are turned off in online matches.'); return; }
     if (settingsOpen) toggleSettings();
     cheatPanel.style.display = 'block';
     playPanelOpenAnim(cheatPanel);
@@ -10559,6 +10583,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     scene.add(mesh);
     const fuse = type === 'grenade' ? 1.7 : (type === 'smokegrenade' ? 1.5 : 4);
     activeGrenades.push({ mesh, pos: startPos.clone(), vel, fuse, isSmoke: type === 'smokegrenade', isMolotov: type === 'molotov', thrower: bot });
+    if (mpMatch.active) mpThrowHost(bot, startPos, vel, type);               // online: show the flying grenade to the others
     if (type === 'grenade') bot.grenades--;
     else if (type === 'smokegrenade') bot.smokeGrenades--;
     else bot.molotovs--;
@@ -10610,7 +10635,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
         // instead of bouncing like the frag/smoke canisters do.
         if (g.isMolotov) {
           g.mesh.position.copy(g.pos);
-          spawnFireZone(g.pos, g.lightweight, g.noPlayerDamage, g.thrower);
+          if (!g.cosmetic) spawnFireZone(g.pos, g.lightweight, g.noPlayerDamage, g.thrower);
           scene.remove(g.mesh);
           activeGrenades.splice(i, 1);
           continue;
@@ -10622,7 +10647,10 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       g.mesh.rotation.x += dt * 6;
       g.fuse -= dt;
       if (g.fuse <= 0) {
-        if (g.isSmoke) spawnSmokeCloud(g.pos); else if (g.isMolotov) spawnFireZone(g.pos, g.lightweight, g.noPlayerDamage, g.thrower); else explodeGrenade(g.pos, g.thrower);
+        if (g.cosmetic) { /* only a picture of the leader's grenade: its blast comes as a separate message */ }
+        else if (g.isSmoke) { spawnSmokeCloud(g.pos); if (mpMatch.active) mpFxHost('smoke', g.pos, g.thrower); }
+        else if (g.isMolotov) spawnFireZone(g.pos, g.lightweight, g.noPlayerDamage, g.thrower);
+        else explodeGrenade(g.pos, g.thrower);
         scene.remove(g.mesh);
         activeGrenades.splice(i, 1);
       }
@@ -10642,6 +10670,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   function blockedByFriendlyFire(thrower, victim) {
     if (!thrower) return false;
     if (victim === thrower && !thrower.isPlayer) return true;
+    if (mpMatch.active && !thrower.isPlayer && victim && !victim.isPlayer && victim.team !== undefined && thrower.team === victim.team) return true;   // online: a bot team never burns or blows up itself
     if (gameMode !== 'ctf') return false;
     const tTeam = ctfTeamOf(thrower), vTeam = ctfTeamOf(victim);
     if (!tTeam || !vTeam) return false;
@@ -10680,6 +10709,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     playExplosionSound(camDist);
     if (camDist < 45) addShake(0.55);
     const RADIUS = 9, MAXDMG = 95;
+    if (mpMatch.active) mpGrenadeOnTeammates(pos, RADIUS, MAXDMG, thrower);   // online: also hurt teammates on other devices, and tell them about the blast
     if (player.alive && !blockedByFriendlyFire(thrower, player)) {
       const d = pos.distanceTo(player.pos);
       if (d < RADIUS && hasLineOfSight(pos, player.pos)) {
@@ -10772,7 +10802,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // since fire on the ground doesn't care what's between you and its source.
   const fireZones = [];
   const FIRE_RADIUS = 5.6, FIRE_DURATION = 5.5, FIRE_TICK = 0.5, FIRE_TICK_DMG = 9;
-  function spawnFireZone(pos, lightweight, noPlayerDamage, thrower) {
+  function spawnFireZone(pos, lightweight, noPlayerDamage, thrower, cosmetic) {
     const floorY = groundHeightAt(pos.x, pos.z, pos.y + 2);
     const group = new THREE.Object3D();
     group.position.set(pos.x, floorY, pos.z);
@@ -10811,10 +10841,13 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     const camDist = pos.distanceTo(camera.position);
     playMolotovShatter(camDist);
     if (camDist < 30) addShake(0.2);
-    fireZones.push({ group, scorch, flames, light, life: 0, nextTickAt: FIRE_TICK, noPlayerDamage: !!noPlayerDamage, thrower });
+    fireZones.push({ group, scorch, flames, light, life: 0, nextTickAt: FIRE_TICK, noPlayerDamage: !!noPlayerDamage, thrower, cosmetic: !!cosmetic });
+    if (!cosmetic && mpMatch.active) mpFxHost('fire', pos, thrower);          // online: the others should see a bot's fire too
   }
   function applyFireDamage(fz) {
+    if (fz.cosmetic) return;                                                  // a copy drawn for a fire that really burns on the leader's device
     const p = fz.group.position;
+    if (mpMatch.active && !fz.noPlayerDamage) mpFireOnTeammates(p, fz.thrower);
     if (player.alive && !fz.noPlayerDamage && !blockedByFriendlyFire(fz.thrower, player)) {
       const d = Math.hypot(p.x - player.pos.x, p.z - player.pos.z);
       if (d < FIRE_RADIUS) damagePlayer(FIRE_TICK_DMG, p, (fz.thrower && !fz.thrower.isPlayer) ? botDeathCamInfo(fz.thrower) : { label: 'Fire' });
@@ -11179,6 +11212,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // match itself comes in later steps. The admin PASSWORD is never stored
   // here - it is typed in and checked by the server.
   const MP_SERVER = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'https://37a5f9f6-test.cyrus-goh.workers.dev';
+  const MP_SERVER_VERSION = 'online-match-v2';   // must match SERVER_VERSION in server.js
   const mp = { ws: null, you: null, code: '', leader: null, teamSize: 3, players: [], inLobby: false, hbTimer: 0, dogTimer: 0, lastMsg: 0, serverOn: null };
   const mpEl = (id) => document.getElementById(id);
 
@@ -11233,6 +11267,11 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       const r = await fetch(MP_SERVER + '/mp/status', { cache: 'no-store', signal: ctl.signal });
       clearTimeout(t);
       const j = await r.json();
+      if (j.v !== MP_SERVER_VERSION) {                 // the game and the server file are from different updates
+        mp.serverOn = false; mpMenuButtons();
+        mpSetMsg('The multiplayer server is out of date' + (j.v ? ' (' + j.v + ')' : '') + '. Upload the newest server.js to your repo and wait for Cloudflare to finish deploying.');
+        return;
+      }
       mp.serverOn = !!j.enabled;
       mpMenuButtons();
       mpSetMsg(mp.serverOn ? '' : (j.reason || 'Online play is turned off right now.'));
@@ -11276,6 +11315,9 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     else if (m.t === 'go') { mpOnGo(); }
     else if (m.t === 'p') { mpOnPose(m); }
     else if (m.t === 'ev') { mpOnEvent(m); }
+    else if (m.t === 'b') { mpOnBots(m); }
+    else if (m.t === 'fw') { mpOnFw(m); }
+    else if (m.t === 'toLobby') { if (mpMatch.active) mpReturnToLobby(); }
     else if (m.t === 'error') {
       if (mpMatch.active) mpNotice(m.msg);
       else if (!mp.inLobby) mpFatal(m.msg);
@@ -11501,6 +11543,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // each player's position / facing / stance (sent ~15 times a second and smoothed on the other side),
   // and the leader's jump + parachute, which the rest of the team copies so you land side by side.
   // Bots, loot, the zone and combat are still local to each device (later steps).
+  var mpReady = false;     // becomes true once the shared-world code below has loaded
   const mpMatch = { active: false, seed: 0, teamSize: 3, roster: [], matchId: 0, remotes: new Map(), phase: 'idle', goReceived: false, planeZ: 0, lastSend: 0, t0: 0, applyingRemote: false, chuteGranted: false };
   function mpIsLeader() { return mp.leader !== null && mp.leader === mp.you; }
   function mpSend(obj) { if (mp.ws && mp.ws.readyState === 1) { try { mp.ws.send(JSON.stringify(obj)); } catch (e) { /* closing */ } } }
@@ -11533,7 +11576,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     group.add(tor, hd, lg);
     const tag = mpNameSprite(p.name); tag.position.y = 2.45; group.add(tag);
     group.visible = false; scene.add(group);
-    const rp = { id: p.id, name: p.name, group, tag, bodyM, snaps: [], clock: [], out: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, flags: 0, speed: 0 }, hasOut: false, alive: true, charAnim: null };
+    const rp = { id: p.id, name: p.name, group, tag, bodyM, snaps: [], clock: [], out: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, flags: 0, speed: 0 }, hasOut: false, alive: true, charAnim: null,
+      proxy: { isRemotePlayer: true, id: p.id, pos: new THREE.Vector3(), alive: true, team: 0 } };      // what the leader's bots aim at
     loadSoldierModel((gltf) => attachCharacterModel(rp, group, [tor, hd, lg], gltf));
     return rp;
   }
@@ -11553,6 +11597,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     mpMatch.active = true; mpMatch.phase = 'starting'; mpMatch.goReceived = false;
     mpMatch.seed = msg.seed >>> 0; mpMatch.teamSize = msg.teamSize === 2 ? 2 : 3;
     mpMatch.roster = msg.roster || []; mpMatch.matchId = msg.matchId || 0;
+    Object.assign(mpMatch, { bsnaps: [], bclock: [], hitQueue: [], lastHitBy: {}, shots: [], lastBotSend: 0, lastCheck: 0, lastHud: 0, over: false, spectating: false, specId: null, leaderSeen: mp.leader });
+    for (const id of ['mpEndScreen', 'mpSpecBar']) mpEl(id).style.display = 'none';
     const rng = mpRng(mpMatch.seed);
     mpMatch.planeZ = (rng() - 0.5) * WORLD_SIZE * 0.5;      // same plane path for the whole team
     mpClearRemotes();
@@ -11560,12 +11606,15 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     mpEl('mpMenuScreen').style.display = 'none'; mpEl('mpLobbyScreen').style.display = 'none'; mpEl('startScreen').style.display = 'none';
     const w = mpEl('mpWait'); w.textContent = 'Getting the match ready...'; w.style.display = 'block';
     const lr = mpEl('mpLeaveRow'); if (lr) lr.style.display = 'flex';
+    const ar = mpEl('mpAdminRowMatch'); if (ar) ar.style.display = 'flex';
     gameMode = 'ffa';
     try { if (!isMobile) canvas.requestPointerLock && canvas.requestPointerLock(); } catch (e) { /* needs a tap on desktop */ }
     try { ensureAudio(); } catch (e) { /* needs a tap */ }
+    mpResetLoot();                 // same loot on every device
     runFFAMatchmaking();           // spawns the bots, then calls mpReadyForGo() instead of taking off alone
   }
   function mpReadyForGo() {
+    mpApplyBotAuthority();                          // the bots exist now: the leader's are real, the others' are copies
     if (mpMatch.goReceived) { mpTakeOff(); return; }
     mpMatch.phase = 'ready';
     mpEl('mpWait').textContent = 'Waiting for your team...';
@@ -11657,9 +11706,15 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     const alive = (o.flags & MPF.ALIVE) !== 0;
     if (rp.alive && !alive) { rp.alive = false; triggerCharOneShot(rp.charAnim, 'dead', { clampLast: true }); }
     if (rp.charAnim) tickCharAnim(rp.charAnim, mpAnimState(o.flags, o.speed), dt);
+    rp.proxy.pos.set(o.x, o.y, o.z); rp.proxy.alive = rp.alive && !(o.flags & MPF.INPLANE);
   }
   function mpOnRosterChange() {
     const present = new Set(mp.players.map((q) => q.id));
+    if (mpMatch.leaderSeen !== mp.leader) {                       // leadership passed on: the new leader's device now runs the bots
+      const first = mpMatch.leaderSeen === null; mpMatch.leaderSeen = mp.leader;
+      if (!first) mpApplyBotAuthority();
+    }
+    if (mpMatch.over) mpRefreshEndButtons();
     for (const id of [...mpMatch.remotes.keys()]) {
       if (!present.has(id)) { const rp = mpMatch.remotes.get(id); mpNotice((rp ? rp.name : 'A player') + ' left the match.'); mpRemoveRemote(id); }
     }
@@ -11681,6 +11736,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       mpSend({ t: 'p', d: [r2(player.pos.x), r2(player.pos.y), r2(player.pos.z), r2(player.yaw), r2(player.pitch), f, Math.max(0, Math.round(player.health)), Math.round(now - mpMatch.t0)] });
     }
     for (const rp of mpMatch.remotes.values()) mpUpdateRemote(rp, now, dt);
+    mpTeamTick(dt, now);
   }
   function mpLeaveMatch() { mpStop(); location.reload(); }                    // simplest clean way back to the menu
 
@@ -11693,7 +11749,417 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     mpSend({ t: 'start' });
   });
   bindTap(mpEl('mpLeaveMatchBtn'), mpLeaveMatch);
+  bindTap(mpEl('mpAdminQuickBtn'), () => { if (settingsOpen) toggleSettings(); mpAdminOpen(); });
   // MPMATCH-END
+
+  // MPTEAM-BEGIN
+  // ---------- Online team match: bots run on the leader's device, shared combat, team elimination ----------
+  // Who simulates what: the LEADER's device runs the real bots (the game's normal bot AI). Every other device
+  // creates the very same bots (same seed) but only displays them from the leader's snapshots (10 a second).
+  // Damage you deal to a bot is sent to the leader; damage bots deal to a teammate is sent to that teammate.
+  // The leader also decides when only one team is left and announces the result.
+  Object.assign(mpMatch, { bsnaps: [], bclock: [], hitQueue: [], lastHitSend: 0, lastHitBy: {}, shots: [], lastBotSend: 0, lastCheck: 0, lastHud: 0,
+    over: false, spectating: false, specId: null, leaderSeen: null });
+  function mpIsHostSim() { return !mpMatch.active || mpIsLeader(); }
+  function mpSendTo(to, k, d) { mpSend({ t: 'fw', to, k, d }); }
+  const mpTotalTeams = () => 1 + mpBotTeamCount(mpMatch.teamSize);
+
+  // ----- bots: identical on every device, teams of the same size as the real team -----
+  function mpSpawnBot(i) {
+    if (!mpMatch.active) { spawnBot(i); return; }
+    const orig = Math.random;
+    Math.random = mpRng(((mpMatch.seed ^ 0x9E3779B9) + i * 7919) >>> 0);    // same bot (look, tier, weapon, start spot) on every device
+    try { spawnBot(i); } finally { Math.random = orig; }
+    const b = bots[bots.length - 1];
+    if (b) { b.mpId = i; b.team = 1 + Math.floor(i / mpMatch.teamSize); }
+  }
+  // The leader's bots are real; on other devices a bot's health can only be changed by the leader's snapshots,
+  // so anything that would damage it there is reported to the leader instead.
+  function mpApplyBotAuthority() {
+    const host = mpIsHostSim();
+    for (const b of bots) {
+      const d = Object.getOwnPropertyDescriptor(b, 'health');
+      if (host) { if (d && d.get) { const v = b._hp; delete b.health; b.health = v; } }
+      else if (!d || !d.get) {
+        b._hp = b.health;
+        Object.defineProperty(b, 'health', {
+          configurable: true, enumerable: true,
+          get() { return this._hp; },
+          set(v) { const dmg = this._hp - v; if (dmg > 0) mpQueueHit(this, dmg); }
+        });
+      }
+    }
+  }
+  function mpQueueHit(bot, dmg) { if (bot.mpId === undefined) return; mpMatch.hitQueue.push([bot.mpId, Math.round(dmg * 10) / 10]); }
+  function mpFlushHits(now) {
+    if (!mpMatch.hitQueue.length || now - mpMatch.lastHitSend < 60) return;
+    mpMatch.lastHitSend = now;
+    mpSendTo('leader', 'hits', mpMatch.hitQueue.splice(0, 40));
+  }
+
+  // ----- leader: send what the bots are doing -----
+  function mpSendBotSnapshot(now) {
+    const d = [];
+    for (const b of bots) {
+      let f = 0;
+      if (b.alive) f |= 1; if (b.falling) f |= 2; if (b.chuteOpen) f |= 4; if (b.moving) f |= 8;
+      d.push(Math.round(b.pos.x * 10), Math.round(b.pos.y * 10), Math.round(b.pos.z * 10), Math.round(b.yaw * 100), f, Math.max(0, Math.round(b.health)));
+    }
+    mpSend({ t: 'b', ts: Math.round(now - mpMatch.t0), d, s: mpMatch.shots.splice(0) });
+  }
+  function mpHostShot(bot, end) {
+    if (!mpIsHostSim() || bot.mpId === undefined) return;
+    mpMatch.shots.push([bot.mpId, Math.round(end.x * 10), Math.round(end.y * 10), Math.round(end.z * 10), bot.weaponType]);
+    if (mpMatch.shots.length > 40) mpMatch.shots.shift();
+  }
+
+  // ----- other devices: show the leader's bots -----
+  function mpOnBots(m) {
+    if (mpIsHostSim() || !Array.isArray(m.d)) return;
+    const now = performance.now();
+    const off = mpClockOffset(mpMatch.bclock, now, m.ts);
+    mpMatch.bsnaps.push({ t: m.ts + off, d: m.d });
+    const n = mpMatch.bsnaps.length;
+    if (n >= 2 && mpMatch.bsnaps[n - 1].t < mpMatch.bsnaps[n - 2].t) mpMatch.bsnaps.pop();
+    if (mpMatch.bsnaps.length > 24) mpMatch.bsnaps.shift();
+    for (const s of (m.s || [])) mpReplicaShot(s);
+  }
+  function mpReplicaShot(s) {
+    const bot = bots[s[0]];
+    if (!bot || !bot.alive) return;
+    const end = new THREE.Vector3(s[1] / 10, s[2] / 10, s[3] / 10);
+    const muzzle = new THREE.Vector3(bot.pos.x, bot.pos.y + 1.2, bot.pos.z);
+    const def = WEAPON_DEFS[s[4]];
+    const color = (def && def.muzzleColor) || 0xffe37a;
+    triggerCharOneShot(bot.charAnim, 'shoot', { durationSeconds: 0.18 });
+    playGunshot(s[4], bot.pos.distanceTo(player.pos));
+    spawnTracer(muzzle, end, color); spawnMuzzleFlash(muzzle, color);
+  }
+  const MP_BOT_DELAY_MS = 170;       // bots are shown this far in the past (updates arrive every 100 ms)
+  function mpReplicaUpdate(dt) {
+    const sn = mpMatch.bsnaps, n = sn.length;
+    if (!n) return;
+    const rt = performance.now() - MP_BOT_DELAY_MS;
+    let a, b, k = 0;
+    if (rt >= sn[n - 1].t) { a = b = sn[n - 1]; }
+    else if (rt <= sn[0].t) { a = b = sn[0]; }
+    else { let i = n - 2; while (i > 0 && sn[i].t > rt) i--; a = sn[i]; b = sn[i + 1]; k = b.t > a.t ? (rt - a.t) / (b.t - a.t) : 1; }
+    if (a.d.length !== bots.length * 6 || b.d.length !== bots.length * 6) return;
+    for (let i = 0; i < bots.length; i++) {
+      const bot = bots[i], o = i * 6;
+      const f = b.d[o + 4];
+      if (!bot.alive) { if (bot.healthSprite) bot.healthSprite.quaternion.copy(camera.quaternion); continue; }
+      if (!(f & 1)) { bot._hp = 0; killBot(bot, false); continue; }
+      const ax = a.d[o] / 10, ay = a.d[o + 1] / 10, az = a.d[o + 2] / 10, bx = b.d[o] / 10, by = b.d[o + 1] / 10, bz = b.d[o + 2] / 10;
+      if (Math.hypot(bx - ax, bz - az) > 20) k = 1;                                       // respawn/teleport: do not slide
+      bot.pos.set(ax + (bx - ax) * k, ay + (by - ay) * k, az + (bz - az) * k);
+      bot.yaw = mpAngleLerp(a.d[o + 3] / 100, b.d[o + 3] / 100, k);
+      bot.group.position.copy(bot.pos); bot.group.rotation.y = bot.yaw;
+      bot.falling = !!(f & 2); bot.chuteOpen = !!(f & 4); bot.moving = !!(f & 8);
+      if (bot.chuteGroup) bot.chuteGroup.visible = bot.falling && bot.chuteOpen;
+      const hp = b.d[o + 5];
+      if (bot._hp !== hp) { bot._hp = hp; updateHealthSprite(bot); }
+      if (bot.healthSprite) bot.healthSprite.quaternion.copy(camera.quaternion);
+    }
+  }
+  function mpUpdateBots(dt) {                                   // replaces the plain "update every bot" loop
+    if (mpMatch.active && !mpIsHostSim()) { mpReplicaUpdate(dt); return; }
+    for (const bot of bots) updateBot(bot, dt);
+  }
+
+  // ----- who the bots shoot at -----
+  function mpFindNearestTarget(bot) {
+    let best = null, bestDist = ENGAGE_RANGE;
+    const playerEngageR = playerHasSuppressor() ? ENGAGE_RANGE * SUPPRESSOR_DETECT_MULT : ENGAGE_RANGE;
+    if (player.alive) {
+      const d = bot.pos.distanceTo(player.pos);
+      if (d < bestDist && d < playerEngageR && hasLineOfSight(bot.pos, player.pos)) { bestDist = d; best = player; }
+    }
+    for (const rp of mpMatch.remotes.values()) {                  // teammates on other devices count as the real team too
+      const t = rp.proxy;
+      if (!t.alive) continue;
+      const d = bot.pos.distanceTo(t.pos);
+      if (d < bestDist && hasLineOfSight(bot.pos, t.pos)) { bestDist = d; best = t; }
+    }
+    for (const other of bots) {                                   // bots fight other bot teams, never their own team
+      if (other === bot || !other.alive || other.falling || other.team === bot.team) continue;
+      const d = bot.pos.distanceTo(other.pos);
+      if (d < bestDist && hasLineOfSight(bot.pos, other.pos)) { bestDist = d; best = other; }
+    }
+    return { target: best, dist: bestDist };
+  }
+  function mpDamageRemote(target, dmg, bot, src) {                 // a bot (on the leader's device) hit a teammate; src = where it came from (default: the bot)
+    const at = src || bot.pos;
+    mpSendTo(target.id, 'dmg', [Math.round(dmg * 10) / 10, Math.round(at.x * 10), Math.round(at.z * 10), bot.mpId === undefined ? -1 : bot.mpId, bot.weaponType]);
+  }
+
+  // ----- messages between devices -----
+  function mpOnFw(m) {
+    const d = m.d;
+    if (m.k === 'hits' && mpIsHostSim() && Array.isArray(d)) {
+      for (const h of d) {
+        const bot = bots[h[0]], amt = +h[1];
+        if (!bot || !bot.alive || !(amt > 0)) continue;
+        mpMatch.lastHitBy[bot.mpId] = m.f;
+        bot.health = Math.max(0, bot.health - Math.min(amt, 400));
+        updateHealthSprite(bot);
+        if (bot.health <= 0) killBot(bot, false);
+      }
+    } else if (m.k === 'dmg' && Array.isArray(d)) {
+      const bot = bots[d[3]];
+      const info = bot ? botDeathCamInfo(bot) : { label: 'Enemy' };
+      damagePlayer(+d[0] || 0, new THREE.Vector3(d[1] / 10, player.pos.y, d[2] / 10), info);
+    } else if (m.k === 'kill') {
+      player.kills++; document.getElementById('kills').textContent = player.kills;
+    } else if (m.k === 'over' && d) {
+      mpShowEnd(!!d.win, d.place | 0);
+    } else if (m.k === 'world' && d) {
+      mpOnWorld(d);
+    } else if (m.k === 'zone' && d) {
+      mpOnZone(d);
+    } else if (m.k === 'fx') {
+      mpOnFx(d);
+    } else if (m.k === 'throw') {
+      mpOnThrow(d);
+    }
+  }
+  // called from killBot() instead of its single-player tail while an online match is running
+  function mpOnBotKilled(bot, killedByPlayer) {
+    aliveBotCount--;
+    if (mpIsHostSim()) {
+      if (bot.weaponType && bot.weaponType !== 'pistol') spawnWeaponPickup(bot.weaponType, bot.pos.x, bot.pos.y, bot.pos.z, true);
+      if (killedByPlayer) { player.kills++; document.getElementById('kills').textContent = player.kills; }
+      else { const h = mpMatch.lastHitBy[bot.mpId]; if (h) mpSendTo(h, 'kill', [bot.mpId]); }
+      mpMatch.lastCheck = 0;                                       // re-check "is only one team left?" on the next tick
+    }
+    mpUpdateAliveHud();
+  }
+  function mpCounts() {
+    let realAlive = player.alive ? 1 : 0;
+    for (const rp of mpMatch.remotes.values()) if (rp.alive) realAlive++;
+    const teams = new Set(); let botsAlive = 0;
+    for (const b of bots) if (b.alive) { botsAlive++; teams.add(b.team); }
+    return { realAlive, botsAlive, botTeams: teams.size };
+  }
+  function mpUpdateAliveHud() { const c = mpCounts(); document.getElementById('aliveCount').textContent = c.botsAlive + c.realAlive; }
+
+  // ----- the end: leader decides, everyone shows it -----
+  function mpCheckOver() {
+    if (mpMatch.over || !mpIsHostSim() || bots.length === 0 || mpMatch.phase !== 'playing') return;
+    const c = mpCounts();
+    if (c.realAlive === 0) mpDeclareOver(false, c.botTeams + 1);
+    else if (c.botsAlive === 0) mpDeclareOver(true, 1);
+  }
+  function mpDeclareOver(win, place) {
+    mpSendTo('all', 'over', { win, place });
+    mpShowEnd(win, place);
+  }
+  function mpShowEnd(win, place) {
+    if (mpMatch.over && mpEl('mpEndScreen').style.display === 'flex') return;
+    mpMatch.over = true; mpMatch.spectating = false; matchWon = true; firing = false;
+    mpEl('mpSpecBar').style.display = 'none'; mpDropHint('');
+    document.getElementById('deathScreen').style.display = 'none';
+    try { document.exitPointerLock && document.exitPointerLock(); } catch (e) {}
+    mpEl('mpEndTitle').textContent = win ? '\uD83D\uDC51 VICTORY ROYALE \uD83D\uDC51' : 'ELIMINATED';
+    mpEl('mpEndSub').textContent = win ? 'Your team is the last one standing.' : 'Your team finished #' + place + ' of ' + mpTotalTeams() + ' teams.';
+    mpEl('mpEndStats').textContent = 'Your kills: ' + player.kills;
+    mpEl('mpEndScreen').style.display = 'flex';
+    mpRefreshEndButtons();
+    if (win) { try { spawnConfetti(); } catch (e) {} }
+  }
+  function mpRefreshEndButtons() {
+    const b = mpEl('mpPlayAgainBtn'), lead = mpIsLeader();
+    b.disabled = !lead; b.textContent = lead ? 'PLAY AGAIN (back to the lobby)' : 'WAITING FOR THE LEADER...';
+  }
+  function mpReturnToLobby() {
+    mpMatch.active = false; mpMatch.phase = 'idle'; mpMatch.over = false; mpMatch.spectating = false;
+    mpClearRemotes();
+    for (const id of ['mpEndScreen', 'mpSpecBar', 'mpWait', 'mpJumpBtn']) mpEl(id).style.display = 'none';
+    mpDropHint('');
+    for (const id of ['dropOverlay', 'deathScreen', 'winScreen']) { const el = document.getElementById(id); if (el) el.style.display = 'none'; }
+    try { disposeFFABots(); stopZone(); } catch (e) {}
+    drop.active = false; player.falling = false; player.chuteOpen = false;
+    const lr = mpEl('mpLeaveRow'); if (lr) lr.style.display = 'none';
+    const ar = mpEl('mpAdminRowMatch'); if (ar) ar.style.display = 'none';
+    mp.inLobby = true; mpShow('lobby'); mpSetMsg(''); mpRenderLobby();
+  }
+  bindTap(mpEl('mpPlayAgainBtn'), () => { if (mpIsLeader()) mpSend({ t: 'toLobby' }); });
+  bindTap(mpEl('mpEndLeaveBtn'), mpLeaveMatch);
+
+  // ----- spectating a teammate after you die -----
+  function mpAfterDeathCam() {                                     // replaces "show the YOU DIED screen" in online matches
+    if (mpMatch.over) return;
+    mpMatch.lastCheck = 0;
+    mpPickSpectate(0);
+  }
+  function mpAliveTeammates() { return [...mpMatch.remotes.values()].filter((rp) => rp.alive && rp.hasOut); }
+  function mpPickSpectate(step) {
+    const list = mpAliveTeammates();
+    if (!list.length) { mpMatch.spectating = false; mpEl('mpSpecBar').style.display = 'none'; return; }
+    let i = list.findIndex((rp) => rp.id === mpMatch.specId);
+    i = (i + (step || 0) + list.length) % list.length; if (i < 0) i = 0;
+    mpMatch.specId = list[i].id; mpMatch.spectating = true;
+    mpEl('mpSpecName').textContent = 'Spectating ' + list[i].name;
+    mpEl('mpSpecBar').style.display = 'flex';
+  }
+  function mpSpectateTick() {
+    if (!mpMatch.spectating || player.alive) return;
+    const rp = mpMatch.remotes.get(mpMatch.specId);
+    if (!rp || !rp.alive) { mpPickSpectate(1); }
+  }
+  function mpSpectateCamera() {                                    // runs right after the normal camera update
+    if (!mpMatch.spectating || player.alive) return;
+    const rp = mpMatch.remotes.get(mpMatch.specId);
+    if (!rp || !rp.hasOut) return;
+    const o = rp.out;
+    camera.position.set(o.x + Math.sin(o.yaw) * 5, o.y + 3, o.z + Math.cos(o.yaw) * 5);
+    camera.lookAt(o.x, o.y + 1.5, o.z);
+  }
+  bindTap(mpEl('mpSpecNext'), () => mpPickSpectate(1));
+
+  function mpTeamTick(dt, now) {                                   // once per frame, from mpMatchTick
+    if (mpMatch.phase !== 'playing') return;
+    if (mpIsHostSim()) {
+      if (now - mpMatch.lastBotSend >= 100) { mpMatch.lastBotSend = now; mpSendBotSnapshot(now); }
+      if (now - mpMatch.lastCheck >= 1000) { mpMatch.lastCheck = now; mpCheckOver(); }
+    } else mpFlushHits(now);
+    if (now - mpMatch.lastHud >= 500) { mpMatch.lastHud = now; mpUpdateAliveHud(); }
+    mpSpectateTick();
+    mpWorldTick(now);
+  }
+  // MPTEAM-END
+
+  // MPWORLD-BEGIN
+  // ---------- Online match: shared loot, built pieces and the storm ----------
+  // Loot: every device creates the SAME loot at match start (shared seed). After that, any change (picked up,
+  // respawned, a gun dropped, a wall built or broken) is announced to the others ~10 times a second.
+  // The storm: the leader's device runs the real one and sends its state every second; the others copy it.
+  Object.assign(mpMatch, { dropSeq: 0, pieceSeq: 0, pkNew: [], pwNew: [], pbNew: [], lootById: new Map(), pieceById: new Map(), lastLootSend: 0, lastZoneSend: 0, mute: false });
+  mpReady = true;
+  const r2w = (v) => Math.round(v * 100) / 100;
+
+  function mpResetLoot() {
+    for (const p of pickups) { scene.remove(p.group); scene.remove(p.ring); }
+    pickups.length = 0;
+    ammoCrates.length = 0;
+    if (crateBoxMesh) scene.remove(crateBoxMesh, crateStripeMesh);
+    Object.assign(mpMatch, { dropSeq: 0, pieceSeq: 0, pkNew: [], pwNew: [], pbNew: [], lootById: new Map(), pieceById: new Map(), lastLootSend: 0, lastZoneSend: 0 });
+    mpMatch.mute = true;
+    const orig = Math.random;
+    Math.random = mpRng(((mpMatch.seed ^ 0xC0FFEE) + 0x1234567) >>> 0);      // same loot (spots and items) on every device
+    try { spawnMapHouseLoot(mapRoot); } finally { Math.random = orig; mpMatch.mute = false; }
+    pickups.forEach((p, i) => { p.nid = 'L' + i; p.net = p.active; mpMatch.lootById.set(p.nid, p); });
+    ammoCrates.forEach((c, i) => { c.nid = 'C' + i; c.net = c.active; mpMatch.lootById.set(c.nid, c); });
+  }
+  function mpOnPickupCreated(p, type, x, y, z, delayActive, carryState) {      // a gun was dropped / a bot died
+    if (!mpReady || !mpMatch.active || mpMatch.mute) return;
+    p.nid = 'D' + mp.you + '-' + (++mpMatch.dropSeq); p.net = p.active; mpMatch.lootById.set(p.nid, p);
+    mpMatch.pkNew.push([p.nid, type, r2w(x), r2w(y), r2w(z), delayActive ? 1 : 0, carryState || 0]);
+  }
+  function mpOnPiecePlaced(entry, type, tier, pos, yaw) {
+    if (!mpReady || !mpMatch.active || mpMatch.mute || !entry) return;
+    entry.nid = 'W' + mp.you + '-' + (++mpMatch.pieceSeq); mpMatch.pieceById.set(entry.nid, entry);
+    mpMatch.pwNew.push([entry.nid, type, tier, r2w(pos.x), r2w(pos.y || 0), r2w(pos.z), r2w(yaw)]);
+  }
+  function mpOnPieceBroken(entry) {
+    if (!mpReady || !mpMatch.active || mpMatch.mute || !entry || !entry.nid) return;
+    mpMatch.pbNew.push(entry.nid); mpMatch.pieceById.delete(entry.nid);
+  }
+  function mpSetLootActive(e, a) {
+    e.active = a;
+    if (e.group) { e.group.visible = a; e.ring.visible = a; } else setAmmoCrateVisible(e, a);
+  }
+  function mpLootSync(now) {                                                   // every ~100 ms, on every device
+    if (now - mpMatch.lastLootSend < 100) return;
+    mpMatch.lastLootSend = now;
+    const s = [];
+    for (const p of pickups) { if (s.length >= 40) break; if (p.nid !== undefined && p.net !== p.active) { p.net = p.active; s.push([p.nid, p.active ? 1 : 0]); } }
+    for (const c of ammoCrates) { if (s.length >= 40) break; if (c.nid !== undefined && c.net !== c.active) { c.net = c.active; s.push([c.nid, c.active ? 1 : 0]); } }
+    const n = mpMatch.pkNew.splice(0, 8), pw = mpMatch.pwNew.splice(0, 12), pb = mpMatch.pbNew.splice(0, 20);
+    if (s.length || n.length || pw.length || pb.length) mpSendTo('all', 'world', { s, n, pw, pb });
+  }
+  function mpOnWorld(d) {
+    mpMatch.mute = true;                                                       // what we copy must not be announced again
+    try {
+      for (const n of (d.n || [])) {
+        if (mpMatch.lootById.has(n[0])) continue;
+        const p = spawnWeaponPickup(n[1], n[2], n[3], n[4], !!n[5], n[6] || undefined);
+        p.nid = n[0]; p.net = p.active; mpMatch.lootById.set(p.nid, p);
+      }
+      for (const w of (d.pw || [])) {
+        if (mpMatch.pieceById.has(w[0])) continue;
+        const e = placeStructure(w[1], w[2], new THREE.Vector3(w[3], w[4], w[5]), w[6]);
+        if (e) { e.nid = w[0]; mpMatch.pieceById.set(e.nid, e); }
+      }
+      for (const [id, a] of (d.s || [])) { const e = mpMatch.lootById.get(id); if (e) { e.net = !!a; mpSetLootActive(e, !!a); } }
+      for (const id of (d.pb || [])) { const e = mpMatch.pieceById.get(id); if (e && builtPieces.includes(e)) breakBuiltPiece(e); mpMatch.pieceById.delete(id); }
+    } finally { mpMatch.mute = false; }
+  }
+  const MP_ZONE_KEYS = ['phase', 'stage', 'timer', 'centerX', 'centerZ', 'radius', 'fromX', 'fromZ', 'fromRadius', 'nextX', 'nextZ', 'nextRadius'];
+  function mpZoneSync(now) {                                                   // leader's device only
+    if (!mpIsHostSim() || !zone.enabled || now - mpMatch.lastZoneSend < 1000) return;
+    mpMatch.lastZoneSend = now;
+    const d = { enabled: true };
+    for (const k of MP_ZONE_KEYS) d[k] = typeof zone[k] === 'number' ? Math.round(zone[k] * 100) / 100 : zone[k];
+    mpSendTo('all', 'zone', d);
+  }
+  function mpOnZone(d) {
+    if (!d || !d.enabled || mpIsHostSim()) return;
+    if (!zone.enabled) startZone();                                            // our own storm has not started yet
+    for (const k of MP_ZONE_KEYS) if (d[k] !== undefined) zone[k] = d[k];
+    updateZoneVisual();
+  }
+  function mpWorldTick(now) { mpLootSync(now); mpZoneSync(now); }
+
+  // ---- bot grenades, smoke and fire: they only exist on the leader's device, so (1) they hurt teammates
+  // on other devices through the same damage messages as bullets, and (2) the leader announces them so
+  // the others see and hear them too (cosmetic copies that never deal damage themselves) ----
+  const r1w = (v) => Math.round(v * 10) / 10;
+  function mpFxHost(kind, pos, thrower) {
+    if (!mpReady || !mpMatch.active || !mpIsHostSim() || !thrower || thrower.isPlayer) return;
+    mpSendTo('all', 'fx', [kind, r1w(pos.x), r1w(pos.y), r1w(pos.z)]);
+  }
+  function mpThrowHost(bot, startPos, vel, type) {
+    if (!mpReady || !mpMatch.active || !mpIsHostSim()) return;
+    mpSendTo('all', 'throw', [type, r1w(startPos.x), r1w(startPos.y), r1w(startPos.z), r1w(vel.x), r1w(vel.y), r1w(vel.z)]);
+  }
+  function mpGrenadeOnTeammates(pos, radius, maxDmg, thrower) {               // a bot's grenade went off on the leader's device
+    if (!mpReady || !mpMatch.active || !mpIsHostSim() || !thrower || thrower.isPlayer) return;
+    for (const rp of mpMatch.remotes.values()) {
+      const t = rp.proxy; if (!t.alive) continue;
+      const d = pos.distanceTo(t.pos);
+      if (d < radius && hasLineOfSight(pos, t.pos)) mpDamageRemote(t, maxDmg * (1 - d / radius), thrower, pos);
+    }
+    mpFxHost('boom', pos, thrower);
+  }
+  function mpFireOnTeammates(p, thrower) {                                    // one burn tick of a bot's fire on the leader's device
+    if (!mpReady || !mpMatch.active || !mpIsHostSim() || !thrower || thrower.isPlayer) return;
+    for (const rp of mpMatch.remotes.values()) {
+      const t = rp.proxy; if (!t.alive) continue;
+      if (Math.hypot(p.x - t.pos.x, p.z - t.pos.z) < FIRE_RADIUS) mpDamageRemote(t, FIRE_TICK_DMG, thrower, p);
+    }
+  }
+  function mpOnFx(d) {                                                        // draw/play what the leader's bots set off
+    if (!Array.isArray(d)) return;
+    const pos = new THREE.Vector3(d[1], d[2], d[3]);
+    if (d[0] === 'boom') { spawnExplosionFX(pos); const dist = pos.distanceTo(camera.position); playExplosionSound(dist); if (dist < 45) addShake(0.55); }
+    else if (d[0] === 'smoke') spawnSmokeCloud(pos);
+    else if (d[0] === 'fire') spawnFireZone(pos, true, true, null, true);
+  }
+  function mpOnThrow(d) {                                                     // a flying grenade, only for show
+    if (!Array.isArray(d) || mpIsHostSim()) return;
+    const type = d[0], start = new THREE.Vector3(d[1], d[2], d[3]), vel = new THREE.Vector3(d[4], d[5], d[6]);
+    let mesh;
+    if (type === 'grenade') mesh = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 8), new THREE.MeshStandardMaterial({ color: 0x3f4a34, roughness: 0.7 }));
+    else if (type === 'smokegrenade') mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.22, 10), new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.6 }));
+    else mesh = buildMolotovMesh(1).group;
+    mesh.position.copy(start); scene.add(mesh);
+    const fuse = type === 'grenade' ? 1.7 : (type === 'smokegrenade' ? 1.5 : 4);
+    activeGrenades.push({ mesh, pos: start.clone(), vel, fuse, isSmoke: type === 'smokegrenade', isMolotov: type === 'molotov', thrower: null, cosmetic: true });
+  }
+  // MPWORLD-END
+
+
 
 
   // ---------- Start / Restart ----------
@@ -12312,7 +12778,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
         if (gameMode === 'zombie') {
           for (const zom of zombies) updateZombie(zom, dt);
         } else {
-          for (const bot of bots) updateBot(bot, dt);
+          mpUpdateBots(dt);
           updateZone(dt);
           if (gameMode === 'ctf' && player.alive && !matchWon) updateCTF(dt);
         }
@@ -12325,7 +12791,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       updateFallingHouses(dt);
       updateCheatHoldLabel();
       updateCheatHitboxes();
-      if (deathCam.active) tickDeathCam(dt); else updateCamera();
+      if (deathCam.active) tickDeathCam(dt); else { updateCamera(); mpSpectateCamera(); }
       updateMobileAimSystems(dt);
       updateWeaponAnim(dt);
       updateFX(dt);
