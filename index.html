@@ -107,13 +107,15 @@
     transform-origin: left center;
   }
 
-  #fpsCounter {
-    position: absolute; top: calc(1px + var(--safe-t)); left: calc(4px + var(--safe-l));
-    color: #9fffb0; font-size: 10px; font-weight: bold; letter-spacing: 0.3px;
+  #fpsCounter {                                  /* FPS and ping together, bottom-left (JS places it right of the green build tag) */
+    position: absolute; bottom: 4px; left: calc(4px + var(--safe-l));
+    font-size: 10px; font-weight: bold; letter-spacing: 0.3px; white-space: nowrap;
     background: rgba(0,0,0,0.5); border-radius: 4px; padding: 1px 6px;
     text-shadow: 0 1px 2px rgba(0,0,0,0.9); pointer-events: none; z-index: 20;
   }
-  #fpsCounter.low { color: #ff8a5f; }
+  #fpsVal { color: #9fffb0; }
+  #fpsCounter.low #fpsVal { color: #ff8a5f; }
+  #pingSep { color: rgba(255,255,255,0.45); }
 
   #bossBarWrap {
     position: absolute; top: 46px; left: 50%; transform: translateX(-50%);
@@ -728,7 +730,7 @@
     <div id="speedLines"></div>
     <div id="zoneVignette"></div>
 
-    <div id="fpsCounter">-- FPS</div>
+    <div id="fpsCounter"><span id="fpsVal">-- FPS</span><span id="pingSep"> | </span><span id="pingVal"></span></div>
 
     <div id="bossBarWrap">
       <div id="bossBarLabel">Zombie Boss</div>
@@ -847,6 +849,7 @@
     <div class="row"><span>Show Dead Bodies</span><button id="corpseToggleBtn" class="miniToggleBtn">ON</button></div>
     <div class="row"><span>Shadows</span><button id="shadowToggleBtn" class="miniToggleBtn">ON</button></div>
     <div class="row"><span>Weather</span><button id="weatherModeBtn" class="miniToggleBtn">AUTO</button></div>
+    <div class="row"><span>Show FPS &amp; Ping</span><button id="perfToggleBtn" class="miniToggleBtn">ON</button></div>
     <h3 style="margin-top:14px;">CROSSHAIR</h3>
     <div class="row"><span>Shape</span>
       <select id="crosshairShapeSelect" class="miniSelect">
@@ -920,6 +923,8 @@
     <div class="mpLine" id="mpAdminRooms"></div>
     <button class="mpBtn red" id="mpAdminToggleBtn">...</button>
     <button class="mpBtn alt" id="mpAdminKickBtn">KICK EVERYONE (close all rooms)</button>
+    <button class="mpBtn alt" id="mpAdminHostBtn">ONLY TEAMS I HOST: ...</button>
+    <div class="mpLine" id="mpAdminHostInfo" style="font-size:12px;opacity:0.85;"></div>
     <div class="mpTwo" style="margin-top:12px;">
       <div><label for="mpAdminMaxRooms">MAX ROOMS</label><input id="mpAdminMaxRooms" class="mpInput" type="number" inputmode="numeric" min="1" max="10"></div>
       <div><label for="mpAdminBudget">DAILY BUDGET</label><input id="mpAdminBudget" class="mpInput" type="number" inputmode="numeric" min="1000" max="95000"></div>
@@ -927,6 +932,7 @@
     <button class="mpBtn" id="mpAdminSaveBtn">SAVE LIMITS</button>
     <div class="mpErr" id="mpAdminErr"></div>
     <button class="mpBtn alt" id="mpAdminRefreshBtn">REFRESH</button>
+    <button class="mpBtn alt" id="mpAdminStayBtn">CLOSE (stay unlocked as host)</button>
     <button class="mpBtn alt" id="mpAdminCloseBtn">LOCK &amp; CLOSE</button>
   </div>
   <!-- MP-MODALS-END -->
@@ -972,7 +978,7 @@
          file and not a cached older copy, given brightness changes weren't
          showing up across several rounds of adjustment. Safe to delete
          once that's confirmed either way; doesn't affect gameplay. -->
-    <div id="dbgBuildTag" style="position:fixed; bottom:4px; left:4px; z-index:99999; font:11px monospace; color:#0f0; background:rgba(0,0,0,0.6); padding:2px 6px; border-radius:4px; pointer-events:none;">build-check: online-match-v4</div>
+    <div id="dbgBuildTag" style="position:fixed; bottom:4px; left:4px; z-index:99999; font:11px monospace; color:#0f0; background:rgba(0,0,0,0.6); padding:2px 6px; border-radius:4px; pointer-events:none;">build-check: online-match-v13</div>
     <!-- TEMPORARY — character auto-fit diagnostic, shown on screen because
          iPad Safari has no console access without a Mac to pair with.
          Take a screenshot of this once it appears (right after spawning)
@@ -2491,6 +2497,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
   function throwableTotal() { return player.grenades + player.smokeGrenades + player.molotovs; }
   function pickupWeapon(p) {
+    if (player.downed) return;                                    // a downed player crawls over loot without taking it
     if ((p.type === 'grenade' || p.type === 'smokegrenade' || p.type === 'molotov') && throwableTotal() >= player.maxThrowablesTotal) {
       // Full up on throwables — leave the pickup where it is instead of
       // consuming it for nothing.
@@ -3095,6 +3102,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     scene.add(crateBoxMesh, crateStripeMesh);
   }
   function updateAmmoCratePickups() {
+    if (player.downed) return;
     for (const crate of ammoCrates) {
       if (!crate.active) continue;
       if (Math.hypot(player.pos.x - crate.x, player.pos.z - crate.z) < 1.6) {
@@ -4430,7 +4438,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
 
   function computePlayerLoopState() {
-    if (!player.alive) return null; // death is handled purely by the one-shot 'dead' trigger below
+    if (!player.alive || player.downed) return null; // death / being downed is handled purely by the one-shot 'dead' trigger
     if (drop.active) return 'idle'; // no dedicated skydive/parachute clip — hold a neutral pose while airborne
     if (player.crouching) return player.moving ? 'crouchWalk' : 'crouch';
     if (player.moving) return player.sprinting ? 'run' : 'walk';
@@ -6173,7 +6181,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     const floorY = groundHeightAt(CITY_CX, CITY_CZ, 5);
     player.pos.set(CITY_CX, floorY, CITY_CZ);
     player.velY = 0; player.grounded = true;
-    player.health = player.maxHealth; player.alive = true;
+    player.health = player.maxHealth; player.alive = true; player.downed = false;
     player.falling = false; player.chuteOpen = false;
     playerGroup.position.copy(player.pos);
     viewMode = 'third';
@@ -7387,6 +7395,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     // off-center from the camera, but the crosshair is dead-center).
     const tracerStart = aimOrigin.clone().addScaledVector(dir, 0.35);
     spawnTracer(tracerStart, endPoint, def.muzzleColor);
+    if (hits.length > 0 && currentMeshType() !== 'flamethrower') mpSpawnImpact(endPoint, def.muzzleColor, def.pellets > 1);      // sparks where your bullet landed (not for flames)
+    if (mpMatch.active && mpShotEnds.length < 3) mpShotEnds.push({ p: endPoint.clone(), hit: hits.length > 0 });      // online: teammates draw this shot too
   }
 
   function fireBullet(def) {
@@ -7427,7 +7437,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
 
   function primaryAction() {
-    if (!player.alive || drop.active || matchWon || player.ragdollTimeLeft > 0 || player.inCar) return;
+    if (!player.alive || player.downed || drop.active || matchWon || player.ragdollTimeLeft > 0 || player.inCar) return;
+    mpReviveInterrupt();                                          // online: shooting / swinging restarts the 20 s of a revive you were doing
     const now = performance.now();
     const melee = MELEE_DEFS[player.weapon];
     if (melee) {
@@ -7463,6 +7474,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
           const entry = builtPieces.find(b => b.mesh === wallHits[0].object);
           if (entry) {
             entry.health -= melee.wallDmg;
+            if (mpMatch.active) mpOnPieceDamaged(entry, melee.wallDmg);      // online: the others' copy of this wall takes the same damage
             showHitMarker(false);
             if (entry.health <= 0) breakBuiltPiece(entry);
           }
@@ -7509,6 +7521,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     addShake(heldType === 'sniper' ? 0.85 : (heldType === 'minigun' ? 0.22 : (heldType === 'shotgun' ? 0.65 : (heldType === 'flamethrower' ? 0.1 : (heldType === 'smg' ? 0.3 : (heldType === 'laser' ? 0.08 : 0.5))))));
     playGunshot(currentMeshType());
     fireBullet(def);
+    if (mpMatch.active) mpNoteShot(heldType);
     triggerCharOneShot(player.charAnim, 'shoot', { durationSeconds: 0.18 });
     if (st.mag === 0) reload();
   }
@@ -7517,10 +7530,12 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   function swingMelee(type) {
     meleeSwingT = 1; meleeSwingType = type;
     const rate = (MELEE_DEFS[type] || {}).rate;
+    if (mpMatch.active) mpSendTo('all', 'melee', [mpWeaponIndex(type)]);
     triggerCharOneShot(player.charAnim, 'attack', rate ? { durationSeconds: rate / 1000 } : undefined);
   }
 
   function reload() {
+    if (player.downed) return;
     if (MELEE_DEFS[player.weapon]) return;
     if (player.isReloading) return;
     const def = currentWeaponDef();
@@ -8023,7 +8038,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // Soft filtered-noise thud for footsteps. distance/muffle logic mirrors
   // playGunshot but much quieter and lower, so it reads as a footstep, not
   // a gunshot echo. loud=false lightens it further for crouched steps.
-  function playFootstep(loud) {
+  function playFootstep(loud, distance) {                         // distance (optional): a teammate's step, silent beyond 30 m
+    if (distance !== undefined && distance > 30) return;
     const ctx = ensureAudio();
     if (!ctx) return;
     const t = ctx.currentTime;
@@ -8034,8 +8050,9 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     filter.type = 'lowpass';
     filter.frequency.value = 260 + Math.random() * 160;
     const g = ctx.createGain();
-    const vol = (loud ? 0.11 : 0.055) + Math.random() * 0.02;
-    g.gain.setValueAtTime(vol, t);
+    let vol = (loud ? 0.11 : 0.055) + Math.random() * 0.02;
+    if (distance !== undefined) vol *= Math.pow(Math.max(0, 1 - distance / 30), 1.5);
+    g.gain.setValueAtTime(Math.max(vol, 0.0001), t);
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
     src.connect(filter); filter.connect(g); g.connect(ctx.destination);
     src.start(t); src.stop(t + 0.1);
@@ -8092,6 +8109,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   let lastDamageInfo = null;
   function damagePlayer(amount, sourcePos, attackerInfo) {
     if (!player.alive) return;
+    if (player.downed) return;                                    // online: a downed player takes no more damage (they bleed out instead)
     if (cheatState.godMode) return;
     if (cheatState.autoDodge) { triggerPlayerDodge(sourcePos); return; }
     if (player.blocking && sourcePos) {
@@ -8105,6 +8123,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       }
     }
     player.health = Math.max(0, player.health - amount);
+    if (amount > 0) mpReviveInterrupt();                          // online: being hit restarts the 20 s of a revive you were doing
     updateHealthUI();
     const vign = document.getElementById('damageVignette');
     vign.classList.add('show'); setTimeout(()=>vign.classList.remove('show'), 300);
@@ -8115,7 +8134,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       label: (attackerInfo && attackerInfo.label) || 'Unknown',
       weapon: (attackerInfo && attackerInfo.weapon) || null
     };
-    if (player.health <= 0) playerDie();
+    if (player.health <= 0) { if (mpGoDown()) return; playerDie(); }      // online with a teammate still standing: you go down instead of dying
   }
   function updateHealthUI() { document.getElementById('healthBar').style.width = (player.health/player.maxHealth*100) + '%'; }
 
@@ -8342,7 +8361,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
   bindTap(document.getElementById('deathCamSkipBtn'), endDeathCam);
   function respawnPlayer() {
-    player.alive = true; player.health = player.maxHealth;
+    player.alive = true; player.downed = false; player.health = player.maxHealth;
     if (player.charAnim) { player.charAnim.mode = 'loop'; player.charAnim.loopState = null; player.charAnim.activeLoopAction = null; }
     player.secondaryType = 'pistol';
     player.ammoState.secondary = { mag: 12, reserve: 36 };
@@ -8742,7 +8761,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // CTF death, without touching captures, guards, or the flag's own state
   // (already handled separately by dropEnemyFlag when they died carrying it).
   function respawnPlayerCTF() {
-    player.alive = true; player.health = player.maxHealth;
+    player.alive = true; player.downed = false; player.health = player.maxHealth;
     if (player.charAnim) { player.charAnim.mode = 'loop'; player.charAnim.loopState = null; player.charAnim.activeLoopAction = null; }
     player.secondaryType = 'pistol';
     player.ammoState.secondary = { mag: 12, reserve: 36 };
@@ -9185,6 +9204,26 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     }
 
     // Player marker (always centered, arrow shows facing)
+    if (mpMatch.active) {                                          // online: teammates are green arrows (pinned to the edge, pointing their way, when far off the map)
+      for (const rp of mpMatch.remotes.values()) {
+        if (!rp.alive || !rp.hasOut || (rp.out.flags & MPF.INPLANE)) continue;
+        const rel = mmProject(rp.out.x - px, rp.out.z - pz, viewRadius);
+        let dx = rel.x - MM_CENTER, dy = rel.y - MM_CENTER;
+        const dist = Math.hypot(dx, dy), maxD = MM_CENTER - 7, far = dist > maxD;
+        if (far) { dx *= maxD / dist; dy *= maxD / dist; }
+        mctx.save();
+        mctx.translate(MM_CENTER + dx, MM_CENTER + dy);
+        mctx.rotate(far ? Math.atan2(dx, -dy) : -rp.out.yaw);
+        mctx.globalAlpha = far ? 0.8 : 1;
+        if (rp.downed) { mctx.save(); mctx.rotate(far ? -Math.atan2(dx, -dy) : rp.out.yaw); mctx.strokeStyle = '#ff6a5a'; mctx.lineWidth = 1.5; mctx.beginPath(); mctx.arc(0, 0, 8 + 2 * Math.sin(performance.now() / 200), 0, Math.PI * 2); mctx.stroke(); mctx.restore(); }
+        mctx.fillStyle = rp.downed ? '#ff9a3d' : '#5fff7a'; mctx.strokeStyle = 'rgba(0,0,0,0.7)'; mctx.lineWidth = 1;
+        mctx.beginPath();
+        mctx.moveTo(0, -5.5); mctx.lineTo(4, 4.5); mctx.lineTo(0, 2.2); mctx.lineTo(-4, 4.5);
+        mctx.closePath(); mctx.fill(); mctx.stroke();
+        mctx.restore();
+      }
+    }
+
     mctx.save();
     mctx.translate(MM_CENTER, MM_CENTER);
     mctx.rotate(-player.yaw);
@@ -9215,7 +9254,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
 
   function tryBuildWall() {
-    if (!buildModeOn) return;
+    if (!buildModeOn || player.downed) return;
     const cost = buildCost(currentBuildPiece, currentBuildTier);
     if (player.wood < cost) return;
     player.wood -= cost;
@@ -9358,14 +9397,14 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     jump: 'Space', crouch: 'KeyC', sprint: 'ShiftLeft', toggleView: 'KeyP', reload: 'KeyR',
     axe: 'Digit1', primary: 'Digit2', pistol: 'Digit3', melee: 'Digit4',
     build: 'KeyB', buildModeToggle: 'KeyN', buildPiece: 'KeyX', buildTier: 'KeyZ', drop: 'KeyG', grenade: 'KeyF', smokeGrenade: 'KeyV', molotov: 'KeyM', inventory: 'Tab', skipWave: 'KeyK',
-    enterCar: 'KeyE'
+    enterCar: 'KeyE', revive: 'KeyQ'
   };
   const KEY_ACTION_LABELS = {
     forward: 'Move Forward', back: 'Move Back', left: 'Move Left', right: 'Move Right',
     jump: 'Jump', crouch: 'Crouch', sprint: 'Sprint', toggleView: 'Toggle View', reload: 'Reload',
     axe: 'Equip Axe', primary: 'Equip Primary', pistol: 'Equip Secondary', melee: 'Equip Melee',
     build: 'Build Piece', buildModeToggle: 'Toggle Build Mode', buildPiece: 'Cycle Piece Type', buildTier: 'Cycle Material', drop: 'Drop Weapon', grenade: 'Throw Grenade', smokeGrenade: 'Throw Smoke Grenade', molotov: 'Throw Molotov', inventory: 'Inventory', skipWave: 'Skip Wave',
-    enterCar: 'Enter/Exit Car'
+    enterCar: 'Enter/Exit Car', revive: 'Revive Teammate (hold)'
   };
   let keyBindings = {};
   try { keyBindings = JSON.parse(localStorage.getItem('blazingice_keyBindings') || '{}'); } catch(e) { keyBindings = {}; }
@@ -10409,7 +10448,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     delete scopeEl.dataset.overlapSaved;
   }
   function startScope() {
-    if (!canScope() || drop.active || invOpen || layoutEditMode || matchWon || player.inCar) return;
+    if (!canScope() || player.downed || drop.active || invOpen || layoutEditMode || matchWon || player.inCar) return;
     isScoped = true;
     camera.fov = effectiveScopeFov();
     camera.updateProjectionMatrix();
@@ -10457,6 +10496,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     }
   });
   function setWeapon(w) {
+    if (player.downed) return;
     if (w === 'primary' && !player.primaryType) return;
     if (w === 'secondary' && !player.secondaryType) return;
     if (w === 'knife' && player.meleeType !== 'knife') return;
@@ -10473,7 +10513,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // ---------- Drop weapon ----------
   bindTap(document.getElementById('dropBtn'), dropWeapon);
   function dropWeapon() {
-    if (!player.alive || drop.active) return;
+    if (!player.alive || player.downed || drop.active) return;
     // Only the primary gun slot can be dropped with this button — the
     // secondary slot (pistol/laser) is always kept and can only be swapped
     // by picking up a different secondary gun, not manually dropped.
@@ -10506,7 +10546,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   const explosionFX = [];
   const smokeClouds = [];
   function throwGrenade() {
-    if (!player.alive || drop.active || invOpen || layoutEditMode || matchWon || player.grenades <= 0) return;
+    if (!player.alive || player.downed || drop.active || invOpen || layoutEditMode || matchWon || player.grenades <= 0) return;
+    mpReviveInterrupt();
     player.grenades--;
     updateGrenadeUI();
     const dir3 = new THREE.Vector3();
@@ -10523,7 +10564,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     activeGrenades.push({ mesh, pos: startPos.clone(), vel, fuse: 1.7, isSmoke: false, thrower: player });
   }
   function throwSmokeGrenade() {
-    if (!player.alive || drop.active || invOpen || layoutEditMode || matchWon || player.smokeGrenades <= 0) return;
+    if (!player.alive || player.downed || drop.active || invOpen || layoutEditMode || matchWon || player.smokeGrenades <= 0) return;
+    mpReviveInterrupt();
     player.smokeGrenades--;
     updateSmokeGrenadeUI();
     const dir3 = new THREE.Vector3();
@@ -10540,7 +10582,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     activeGrenades.push({ mesh, pos: startPos.clone(), vel, fuse: 1.5, isSmoke: true, thrower: player });
   }
   function throwMolotov() {
-    if (!player.alive || drop.active || invOpen || layoutEditMode || matchWon || player.molotovs <= 0) return;
+    if (!player.alive || player.downed || drop.active || invOpen || layoutEditMode || matchWon || player.molotovs <= 0) return;
+    mpReviveInterrupt();
     player.molotovs--;
     updateMolotovUI();
     const dir3 = new THREE.Vector3();
@@ -10985,7 +11028,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   window.addEventListener('contextmenu', clearAllKeys);
 
   function tryJump() {
-    if (player.grounded && player.alive && !drop.active) {
+    if (player.grounded && player.alive && !player.downed && !drop.active) {
       player.velY = 8; player.grounded = false;
       triggerCharOneShot(player.charAnim, 'jump', { durationSeconds: 0.8 });
     }
@@ -11212,8 +11255,9 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // match itself comes in later steps. The admin PASSWORD is never stored
   // here - it is typed in and checked by the server.
   const MP_SERVER = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'https://37a5f9f6-test.cyrus-goh.workers.dev';
-  const MP_SERVER_VERSION = 'online-match-v2';   // must match SERVER_VERSION in server.js
-  const mp = { ws: null, you: null, code: '', leader: null, teamSize: 3, players: [], inLobby: false, hbTimer: 0, dogTimer: 0, lastMsg: 0, serverOn: null };
+  const MP_SERVER_VERSION = 'online-match-v6';   // must match SERVER_VERSION in server.js
+  const mp = { ws: null, you: null, code: '', leader: null, teamSize: 3, players: [], inLobby: false, hbTimer: 0, dogTimer: 0, lastMsg: 0, serverOn: null,
+    token: '', myName: '', away: [], rc: { on: false, since: 0, tries: 0, timer: 0 } };      // token = secret key the server gave us (to get back in); away = teammates whose connection dropped; rc = reconnecting
   const mpEl = (id) => document.getElementById(id);
 
   // Typing in these boxes must not trigger game hotkeys.
@@ -11237,14 +11281,16 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   function mpName() {
     let n = (mpEl('mpNameInput').value || '').trim().slice(0, 16);
     if (!n) n = 'Player';
+    mp.myName = n;
     try { localStorage.setItem('owc_mp_name', n); } catch (e) {}
     return n;
   }
   function mpStop() {
-    clearInterval(mp.hbTimer); clearInterval(mp.dogTimer);
+    clearInterval(mp.hbTimer); clearInterval(mp.dogTimer); clearInterval(mp.pingTimer); mpPingReset();
     const ws = mp.ws; mp.ws = null;
     if (ws) { ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null; try { ws.close(1000); } catch (e) {} }
-    mp.inLobby = false; mp.you = null; mp.players = [];
+    clearTimeout(mp.rc.timer); mp.rc = { on: false, since: 0, tries: 0, timer: 0 };
+    mp.inLobby = false; mp.you = null; mp.players = []; mp.token = ''; mp.away = [];
   }
   function mpMenuButtons() {
     const off = mp.serverOn === false;
@@ -11281,6 +11327,132 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     }
   }
 
+  // ----- Reconnecting in the middle of a match -----
+  // If the connection drops during a match the game keeps its state and tries to get back into the same room with the secret key
+  // the server gave us. The server keeps our place for 2 minutes. When we are back, a teammate re-sends the loot and walls as they are now.
+  const MP_REJOIN_MS = 110000;                                   // a little shorter than the server's 2 minutes
+  function mpStartTimers(ws) {
+    clearInterval(mp.hbTimer); clearInterval(mp.dogTimer);
+    mp.hbTimer = setInterval(() => { if (ws.readyState === 1) ws.send('{"t":"hb"}'); }, 20000);
+    mp.dogTimer = setInterval(() => { if (Date.now() - mp.lastMsg > 50000) mpOnSocketLost('Connection lost (the server stopped answering).'); }, 5000);
+    clearInterval(mp.pingTimer); mpPingReset();
+    mp.pingTimer = setInterval(() => mpPingSend(ws), 1000);                                        // a ping every second (the answer also proves the connection is alive)
+    mpPingSend(ws);
+  }
+  // ----- Ping: how long a message takes to reach the server and come back (the number shown next to FPS) -----
+  // Every ping carries a counter that the server sends straight back, so each answer is matched to the exact question it belongs to
+  // (a late answer to an old ping can never be mistaken for a new one). The number shown is the middle value of the last 5 measurements,
+  // so a single odd one does not make it jump around.
+  const mpPing = { n: 0, sentN: 0, sentAt: 0, firstSent: 0, lastReply: 0, samples: [], ms: null };
+  function mpPingReset() { mpPing.sentN = 0; mpPing.sentAt = 0; mpPing.firstSent = 0; mpPing.lastReply = 0; mpPing.samples.length = 0; mpPing.ms = null; }
+  function mpPingSend(ws) {
+    if (!ws || ws.readyState !== 1) return;
+    const now = performance.now();
+    if (mpPing.sentN && now - mpPing.sentAt < 3000) return;                                        // still waiting for the last answer (give up on it after 3 s)
+    mpPing.n = (mpPing.n % 999999) + 1;
+    mpPing.sentN = mpPing.n; mpPing.sentAt = now;
+    if (!mpPing.firstSent) mpPing.firstSent = now;
+    ws.send('{"t":"hb","n":' + mpPing.n + '}');
+  }
+  function mpPingOnReply(m) {
+    if (!mpPing.sentN || m.n !== mpPing.sentN) return;                                             // not the answer we are waiting for
+    const now = performance.now();
+    mpPing.sentN = 0; mpPing.lastReply = now;
+    mpPing.samples.push(now - mpPing.sentAt);
+    if (mpPing.samples.length > 5) mpPing.samples.shift();
+    const sorted = mpPing.samples.slice().sort((a, b) => a - b);
+    mpPing.ms = sorted[sorted.length >> 1];
+  }
+  function mpPingView() {                                                                          // what the corner shows for ping (null = not in an online room)
+    if (mp.you === null) return null;
+    if (!mp.ws || mp.rc.on) return { text: '-- ms', color: '#ff8a5f' };                           // connection lost, reconnecting
+    const now = performance.now();
+    if (mpPing.ms === null) return { text: '-- ms', color: (mpPing.firstSent && now - mpPing.firstSent > 4000) ? '#ff8a5f' : '#bbbbbb' };
+    if (now - mpPing.lastReply > 4000) return { text: '-- ms', color: '#ff8a5f' };                // no answer for 4 seconds
+    const ms = Math.round(mpPing.ms);
+    return { text: ms + ' ms', color: ms < 70 ? '#9fffb0' : (ms < 130 ? '#ffd36b' : '#ff8a5f') };
+  }
+  function mpOnSocketLost(text) { if (mpMatch.active) mpConnectionLost(text); else mpFatal(text); }
+  function mpShowReconnect(show, text) {
+    let el = mpEl('mpReconnect');
+    if (!el) {
+      el = document.createElement('div'); el.id = 'mpReconnect';
+      el.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:100000;display:none;flex-direction:column;align-items:center;justify-content:center;gap:20px;background:rgba(0,0,0,0.75);color:#fff;font:bold 22px sans-serif;text-align:center;padding:24px;';
+      const t = document.createElement('div'); t.id = 'mpReconnectText'; el.appendChild(t);
+      const b = document.createElement('button'); b.textContent = 'LEAVE MATCH';
+      b.style.cssText = 'font:bold 18px sans-serif;padding:12px 26px;border-radius:10px;border:0;background:#c0392b;color:#fff;';
+      bindTap(b, mpLeaveMatch); el.appendChild(b);
+      document.body.appendChild(el);
+    }
+    if (show) { try { document.exitPointerLock && document.exitPointerLock(); } catch (e) {} }
+    el.style.display = show ? 'flex' : 'none';
+    if (text !== undefined) mpEl('mpReconnectText').textContent = text;
+  }
+  function mpConnectionLost(text) {
+    if (mp.rc.on) return;
+    if (!mp.token || mp.you === null || !mp.code) { mpFatal(text); return; }     // nothing to get back in with
+    clearInterval(mp.hbTimer); clearInterval(mp.dogTimer); clearInterval(mp.pingTimer);
+    const old = mp.ws; mp.ws = null;
+    if (old) { old.onopen = old.onmessage = old.onclose = old.onerror = null; try { old.close(); } catch (e) {} }
+    mp.rc = { on: true, since: Date.now(), tries: 0, timer: 0 };
+    mpReconnectTry();
+  }
+  function mpReconnectTry() {
+    const rc = mp.rc;
+    if (!rc.on) return;
+    if (Date.now() - rc.since > MP_REJOIN_MS) { mpRejoinFailed('Could not get back into the match.'); return; }
+    rc.tries++;
+    mpShowReconnect(true, 'Connection lost. Reconnecting... (try ' + rc.tries + ')');
+    const url = MP_SERVER.replace(/^http/, 'ws') + '/mp/ws?room=' + encodeURIComponent(mp.code) + '&rejoin=' + encodeURIComponent(mp.you) + '&tok=' + encodeURIComponent(mp.token) + '&name=' + encodeURIComponent(mp.myName || 'Player');
+    let ws = null, settled = false, guard = 0;
+    const retry = () => {                                        // network problem: try again in a moment
+      if (settled) return; settled = true; clearTimeout(guard);
+      if (ws) { ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null; try { ws.close(); } catch (e) {} }
+      if (mp.rc === rc && rc.on) rc.timer = setTimeout(mpReconnectTry, 2500);
+    };
+    guard = setTimeout(retry, 9000);
+    try { ws = new WebSocket(url); } catch (e) { retry(); return; }
+    ws.onmessage = (e) => {
+      if (settled || !rc.on || mp.rc !== rc) return;
+      let m; try { m = JSON.parse(e.data); } catch (x) { return; }
+      if (m.t === 'welcome' && m.rejoined) { settled = true; clearTimeout(guard); mpAfterRejoin(ws, m); }
+      else if (m.t === 'error' || m.t === 'closed') {            // the server said no (room gone, time ran out, switched off...): no point trying again
+        settled = true; clearTimeout(guard);
+        ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null; try { ws.close(); } catch (x) {}
+        mpRejoinFailed(m.msg || m.reason || 'Could not get back into the match.');
+      }
+    };
+    ws.onclose = () => retry();
+    ws.onerror = () => {};
+  }
+  function mpRejoinFailed(text) {
+    mpStop();
+    mpShowReconnect(true, text + ' Going back to the menu...');
+    setTimeout(() => location.reload(), 3000);
+  }
+  function mpAfterRejoin(ws, m) {
+    clearTimeout(mp.rc.timer); mp.rc.on = false;
+    mpShowReconnect(false);
+    mp.ws = ws; mp.lastMsg = Date.now();
+    ws.onopen = null;
+    ws.onmessage = (e) => { mp.lastMsg = Date.now(); let x; try { x = JSON.parse(e.data); } catch (err) { return; } mpHandle(x); };
+    ws.onclose = () => { if (mp.ws === ws) mpOnSocketLost('Connection lost.'); };
+    ws.onerror = () => {};
+    mpStartTimers(ws);
+    mpHandle(m);                                                  // the welcome: same id, same key
+    mpNotice('Back online.', 2500);
+    if (mpMatch.phase === 'ready') mpSend({ t: 'ready' });        // we were still waiting for take-off
+    if (mpMatch.phase === 'playing') mpSendTo('leader', 'sync', null);   // ask the leader to resend the loot and walls as they are now
+  }
+  document.addEventListener('visibilitychange', () => {          // coming back to the app (iPad): is the connection still alive?
+    if (document.hidden || !mpMatch.active || mp.rc.on) return;
+    const ws = mp.ws;
+    if (!ws || ws.readyState !== 1) { mpConnectionLost('Connection lost.'); return; }
+    const mark = Date.now();
+    try { ws.send('{"t":"hb"}'); } catch (e) {}
+    setTimeout(() => { if (mpMatch.active && !mp.rc.on && mp.ws === ws && mp.lastMsg < mark) mpConnectionLost('Connection lost.'); }, 4000);
+  });
+
   function mpConnect(query) {
     mpStop();
     mpSetMsg('Connecting...', true);
@@ -11290,23 +11462,20 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     try { ws = new WebSocket(url); } catch (e) { mpFatal('Could not start the connection.'); return; }
     mp.ws = ws; mp.lastMsg = Date.now();
     const guard = setTimeout(() => { if (mp.ws === ws && !mp.inLobby) mpFatal('Could not connect. Check your internet and try again.'); }, 10000);
-    ws.onopen = () => {
-      mp.hbTimer = setInterval(() => { if (ws.readyState === 1) ws.send('{"t":"hb"}'); }, 20000);
-      mp.dogTimer = setInterval(() => { if (Date.now() - mp.lastMsg > 50000) mpFatal('Connection lost (the server stopped answering).'); }, 5000);
-    };
+    ws.onopen = () => { mpStartTimers(ws); };
     ws.onmessage = (e) => {
       mp.lastMsg = Date.now();
       let m; try { m = JSON.parse(e.data); } catch (x) { return; }
       mpHandle(m);
     };
-    ws.onclose = () => { clearTimeout(guard); if (mp.ws === ws) mpFatal(mp.inLobby ? 'Connection lost.' : 'Could not connect. Check your internet and try again.'); };
+    ws.onclose = () => { clearTimeout(guard); if (mp.ws === ws) mpOnSocketLost(mp.inLobby ? 'Connection lost.' : 'Could not connect. Check your internet and try again.'); };
     ws.onerror = () => {};
   }
 
   function mpHandle(m) {
-    if (m.t === 'welcome') { mp.you = m.you; }
+    if (m.t === 'welcome') { mp.you = m.you; if (m.tok) mp.token = m.tok; }
     else if (m.t === 'lobby') {
-      mp.code = m.code; mp.leader = m.leader; mp.teamSize = m.teamSize; mp.players = m.players || [];
+      mp.code = m.code; mp.leader = m.leader; mp.teamSize = m.teamSize; mp.players = m.players || []; mp.away = m.away || [];
       if (mpMatch.active) { mpOnRosterChange(); return; }
       if (!mp.inLobby) { mp.inLobby = true; mpShow('lobby'); mpSetMsg(''); }
       mpRenderLobby();
@@ -11317,6 +11486,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     else if (m.t === 'ev') { mpOnEvent(m); }
     else if (m.t === 'b') { mpOnBots(m); }
     else if (m.t === 'fw') { mpOnFw(m); }
+    else if (m.t === 'chat') { mpChatReceive(m); }
+    else if (m.t === 'hbr') { mpPingOnReply(m); }
     else if (m.t === 'toLobby') { if (mpMatch.active) mpReturnToLobby(); }
     else if (m.t === 'error') {
       if (mpMatch.active) mpNotice(m.msg);
@@ -11365,7 +11536,18 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     mpShow('menu'); mpSetMsg(''); mpCheckServer();
   });
   bindTap(mpEl('mpMenuBackBtn'), () => { mpStop(); mpShow('none'); });
-  bindTap(mpEl('mpCreateBtn'), () => { mpConnect('create=1&size=3&name=' + encodeURIComponent(mpName())); });
+  let mpCreateBusy = false;
+  bindTap(mpEl('mpCreateBtn'), async () => {
+    const q = 'create=1&size=3&name=' + encodeURIComponent(mpName());
+    if (!mpAdmin.token) { mpConnect(q); return; }                                                // normal player
+    if (mpCreateBusy) return;
+    mpCreateBusy = true;
+    try {                                                                                        // unlocked as owner: a one-time pass makes this room count as yours
+      const r = await mpAdminCall('/mp/admin/ticket', 'POST', {});
+      if (r.status === 401) mpAdminForget();
+      mpConnect(q + (r.status === 200 && r.j.ticket ? '&host=' + encodeURIComponent(r.j.ticket) : ''));
+    } finally { mpCreateBusy = false; }
+  });
   bindTap(mpEl('mpJoinBtn'), () => {
     const code = (mpEl('mpCodeInput').value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (code.length < 4) { mpSetMsg('Enter the room code your leader gave you.'); return; }
@@ -11426,14 +11608,45 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     mpEl('mpAdminState').style.color = s.enabled ? '#9fe6a0' : '#ffb4b4';
     const pct = s.usage.budget ? Math.round((s.usage.units / s.usage.budget) * 100) : 0;
     mpEl('mpAdminUsage').textContent = 'Used today: ' + s.usage.units + ' of ' + s.usage.budget + ' (' + pct + '%)';
-    mpEl('mpAdminRooms').textContent = s.rooms.length
-      ? 'Open rooms: ' + s.rooms.map((r) => r.code + ' (' + r.players + ' player' + (r.players === 1 ? '' : 's') + ', ' + Math.round(r.ageSeconds / 60) + ' min)').join(', ')
-      : 'No open rooms.';
+    mpAdminRenderRooms(s.rooms);
     const tb = mpEl('mpAdminToggleBtn');
     tb.textContent = s.enabled ? 'TURN MULTIPLAYER OFF (kicks everyone)' : 'TURN MULTIPLAYER ON';
     tb.className = 'mpBtn ' + (s.enabled ? 'red' : 'green');
     mpEl('mpAdminMaxRooms').value = s.cfg.maxRooms; mpEl('mpAdminBudget').value = s.cfg.dailyBudget;
-    mpEl('mpAdminErr').textContent = '';
+    const hb = mpEl('mpAdminHostBtn');
+    hb.textContent = s.cfg.hostOnly ? 'ONLY TEAMS I HOST: ON' : 'ONLY TEAMS I HOST: OFF';
+    hb.className = 'mpBtn ' + (s.cfg.hostOnly ? 'green' : 'alt');
+    mpEl('mpAdminHostInfo').textContent = s.cfg.hostOnly
+      ? 'ON: only rooms you create can be joined. Stay unlocked here (CLOSE, not LOCK) and create your room from this browser.'
+      : 'OFF: anyone can create and join rooms.';
+    mpEl('mpAdminErr').textContent = s.notice || '';
+  }
+  function mpAdminRenderRooms(rooms) {                                                          // one block per room, one REMOVE button per player
+    const box = mpEl('mpAdminRooms');
+    box.textContent = '';
+    if (!rooms.length) { box.textContent = 'No open rooms.'; return; }
+    for (const r of rooms) {
+      const head = document.createElement('div');
+      head.style.cssText = 'margin-top:8px;font-weight:bold;';
+      head.textContent = 'Room ' + r.code + (r.owner ? ' (yours)' : '') + ' - ' + r.players + ' player' + (r.players === 1 ? '' : 's') + ', ' + Math.round(r.ageSeconds / 60) + ' min';
+      box.appendChild(head);
+      for (const p of (r.list || [])) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;margin:3px 0;';
+        const nm = document.createElement('span');
+        nm.textContent = p.name + (p.away ? ' (lost connection)' : '');
+        const btn = document.createElement('button');
+        btn.textContent = 'REMOVE';
+        btn.style.cssText = 'padding:5px 12px;border-radius:6px;border:0;background:#b3392f;color:#fff;font:bold 12px sans-serif;';
+        let armed = 0;                                                                          // two taps, so a stray tap cannot remove someone
+        bindTap(btn, () => {
+          if (armed && Date.now() - armed < 3000) { armed = 0; mpAdminAction('/mp/admin/kick', { code: r.code, id: p.id }); return; }
+          armed = Date.now(); btn.textContent = 'SURE?';
+          setTimeout(() => { if (armed && Date.now() - armed >= 2900) { armed = 0; btn.textContent = 'REMOVE'; } }, 3000);
+        });
+        row.appendChild(nm); row.appendChild(btn); box.appendChild(row);
+      }
+    }
   }
   async function mpAdminAction(path, body) {
     mpEl('mpAdminErr').textContent = 'Working...';
@@ -11448,6 +11661,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   mpEl('mpAdminPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') mpAdminLoginSubmit(); });
   bindTap(mpEl('mpAdminToggleBtn'), () => { if (mpAdmin.state) mpAdminAction('/mp/admin/enable', { enabled: !mpAdmin.state.enabled }); });
   bindTap(mpEl('mpAdminKickBtn'), () => { mpAdminAction('/mp/admin/kickall'); });
+  bindTap(mpEl('mpAdminHostBtn'), () => { if (mpAdmin.state) mpAdminAction('/mp/admin/limits', { hostOnly: !mpAdmin.state.cfg.hostOnly }); });
+  bindTap(mpEl('mpAdminStayBtn'), () => { mpEl('mpAdminPanel').style.display = 'none'; });       // closes the panel but stays unlocked: rooms you create now count as yours
   bindTap(mpEl('mpAdminSaveBtn'), () => { mpAdminAction('/mp/admin/limits', { maxRooms: mpEl('mpAdminMaxRooms').value, dailyBudget: mpEl('mpAdminBudget').value }); });
   bindTap(mpEl('mpAdminRefreshBtn'), mpAdminRefresh);
   bindTap(mpEl('mpAdminCloseBtn'), () => { mpAdminForget(); mpEl('mpAdminPanel').style.display = 'none'; });
@@ -11467,7 +11682,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
   function mpBotTeamCount(teamSize) { return teamSize === 2 ? 24 : 15; }   // 2 players: 25 teams in total, 3 players: 16 teams
   function mpBotCount(teamSize) { return mpBotTeamCount(teamSize) * teamSize; }
-  const MPF = { MOVING: 1, SPRINT: 2, CROUCH: 4, ALIVE: 8, FALLING: 16, CHUTE: 32, FIRING: 64, INPLANE: 128, INCAR: 256 };
+  const MPF = { MOVING: 1, SPRINT: 2, CROUCH: 4, ALIVE: 8, FALLING: 16, CHUTE: 32, FIRING: 64, INPLANE: 128, INCAR: 256, DOWNED: 512 };
   function mpAngleLerp(a, b, t) {
     const TAU = Math.PI * 2;
     const d = ((((b - a + Math.PI) % TAU) + TAU) % TAU) - Math.PI;
@@ -11514,7 +11729,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
   // Which animation clip a remote player should play.
   function mpAnimState(flags, speed) {
-    if (!(flags & MPF.ALIVE)) return null;                      // death is a one-shot clip handled separately
+    if (!(flags & MPF.ALIVE) || (flags & MPF.DOWNED)) return null;   // death / being downed is a one-shot clip handled separately
     if (flags & (MPF.FALLING | MPF.CHUTE | MPF.INPLANE)) return 'idle';
     const moving = (flags & MPF.MOVING) && speed > 0.25;
     if (flags & MPF.CROUCH) return moving ? 'crouchWalk' : 'crouch';
@@ -11554,13 +11769,13 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
   function mpDropHint(text) { const el = mpEl('mpDropHint'); if (el) { el.textContent = text || ''; el.style.display = text ? 'block' : 'none'; } }
 
-  function mpNameSprite(name) {
+  function mpNameSprite(name, color) {
     const cnv = document.createElement('canvas'); cnv.width = 256; cnv.height = 64;
     const ctx = cnv.getContext('2d');
     if (ctx) {
       ctx.font = 'bold 30px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(0,0,0,0.85)'; ctx.strokeText(name, 128, 32);
-      ctx.fillStyle = '#7ff0e0'; ctx.fillText(name, 128, 32);
+      ctx.fillStyle = color || '#7ff0e0'; ctx.fillText(name, 128, 32);
     }
     const tex = new THREE.CanvasTexture(cnv);
     const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
@@ -11574,9 +11789,20 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     const hd = new THREE.Mesh(humanoidHeadGeo, skinMat); hd.position.y = 1.65; hd.castShadow = true;
     const lg = new THREE.Mesh(humanoidLegsGeo, legMat); lg.position.y = 0.45; lg.castShadow = true;
     group.add(tor, hd, lg);
+    const wRig = new THREE.Object3D(); wRig.position.set(0.32, 0.2, 0.15); tor.add(wRig);      // same hand spot the bots use
+    const chuteGroup = new THREE.Object3D();                                                      // parachute, drawn like the bots' ones, teal like the teammate
+    const canopy = new THREE.Mesh(new THREE.ConeGeometry(1.1, 0.9, 10, 1, true), new THREE.MeshStandardMaterial({ color: 0x2fb7a8, side: THREE.DoubleSide, roughness: 0.8 }));
+    canopy.position.y = 3.4; canopy.rotation.x = Math.PI; chuteGroup.add(canopy);
+    const riserMat = new THREE.MeshBasicMaterial({ color: 0x222222 });
+    for (const sx of [-0.28, 0.28]) {
+      const riser = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 2.1, 4), riserMat);
+      riser.position.set(sx, 2.35, 0); riser.rotation.z = sx > 0 ? -0.25 : 0.25; chuteGroup.add(riser);
+    }
+    chuteGroup.visible = false; group.add(chuteGroup);
+    const downTag = mpNameSprite('DOWNED', '#ff6a5a'); downTag.position.y = 1.15; downTag.visible = false; group.add(downTag);      // shown while the teammate is downed
     const tag = mpNameSprite(p.name); tag.position.y = 2.45; group.add(tag);
     group.visible = false; scene.add(group);
-    const rp = { id: p.id, name: p.name, group, tag, bodyM, snaps: [], clock: [], out: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, flags: 0, speed: 0 }, hasOut: false, alive: true, charAnim: null,
+    const rp = { id: p.id, name: p.name, group, tag, bodyM, wRig, chuteGroup, downTag, downed: false, stepT: 0, gunMesh: null, heldType: undefined, swingT: 0, swingType: null, snaps: [], clock: [], out: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, flags: 0, speed: 0 }, hasOut: false, alive: true, charAnim: null,
       proxy: { isRemotePlayer: true, id: p.id, pos: new THREE.Vector3(), alive: true, team: 0 } };      // what the leader's bots aim at
     loadSoldierModel((gltf) => attachCharacterModel(rp, group, [tor, hd, lg], gltf));
     return rp;
@@ -11586,6 +11812,9 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     scene.remove(rp.group);
     if (rp.tag) { if (rp.tag.material.map) rp.tag.material.map.dispose(); rp.tag.material.dispose(); }
     if (rp.bodyM) rp.bodyM.dispose();
+    if (rp.downTag) { if (rp.downTag.material.map) rp.downTag.material.map.dispose(); rp.downTag.material.dispose(); }
+    if (rp.chuteGroup) rp.chuteGroup.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+    if (rp.gunMesh) disposeMeshGeometriesOnly(rp.gunMesh);
     if (rp.charAnim && rp.charAnim.mixer) { rp.charAnim.mixer.stopAllAction(); rp.charAnim.mixer.uncacheRoot(rp.charAnim.model); }
     mpMatch.remotes.delete(id);
   }
@@ -11597,7 +11826,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     mpMatch.active = true; mpMatch.phase = 'starting'; mpMatch.goReceived = false;
     mpMatch.seed = msg.seed >>> 0; mpMatch.teamSize = msg.teamSize === 2 ? 2 : 3;
     mpMatch.roster = msg.roster || []; mpMatch.matchId = msg.matchId || 0;
-    Object.assign(mpMatch, { bsnaps: [], bclock: [], hitQueue: [], lastHitBy: {}, shots: [], lastBotSend: 0, lastCheck: 0, lastHud: 0, over: false, spectating: false, specId: null, leaderSeen: mp.leader });
+    Object.assign(mpMatch, { bsnaps: [], bclock: [], hitQueue: [], lastHitBy: {}, shots: [], lastBotSend: 0, lastCheck: 0, lastHud: 0, over: false, spectating: false, specId: null, leaderSeen: mp.leader, awayAlive: new Map(), paIds: null, paParts: 0 });
+    mpRvReset();
     for (const id of ['mpEndScreen', 'mpSpecBar']) mpEl(id).style.display = 'none';
     const rng = mpRng(mpMatch.seed);
     mpMatch.planeZ = (rng() - 0.5) * WORLD_SIZE * 0.5;      // same plane path for the whole team
@@ -11695,6 +11925,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     const n = rp.snaps.length;
     if (n >= 2 && rp.snaps[n - 1].t < rp.snaps[n - 2].t) rp.snaps.pop();      // a late, out-of-order update: ignore
     if (rp.snaps.length > 40) rp.snaps.shift();
+    if (d.length > 8) mpSetRemoteGun(rp, WEAPON_TYPES[d[8]] || null);
   }
   function mpUpdateRemote(rp, now, dt) {
     if (!mpSample(rp.snaps, now - MP_DELAY_MS, rp.out)) { rp.group.visible = false; return; }
@@ -11705,8 +11936,113 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     rp.group.rotation.y = o.yaw;
     const alive = (o.flags & MPF.ALIVE) !== 0;
     if (rp.alive && !alive) { rp.alive = false; triggerCharOneShot(rp.charAnim, 'dead', { clampLast: true }); }
+    const downed = alive && (o.flags & MPF.DOWNED) !== 0;          // lying on the ground, waiting to be revived
+    if (downed && !rp.downed) triggerCharOneShot(rp.charAnim, 'dead', { clampLast: true });
+    else if (!downed && rp.downed && alive) mpCharStandUp(rp.charAnim);
+    rp.downed = downed; rp.downTag.visible = downed;
     if (rp.charAnim) tickCharAnim(rp.charAnim, mpAnimState(o.flags, o.speed), dt);
-    rp.proxy.pos.set(o.x, o.y, o.z); rp.proxy.alive = rp.alive && !(o.flags & MPF.INPLANE);
+    rp.proxy.pos.set(o.x, o.y, o.z); rp.proxy.alive = rp.alive && !downed && !(o.flags & MPF.INPLANE);       // bots ignore a downed teammate
+    if (rp.gunMesh) rp.gunMesh.visible = alive && !downed;
+    mpTickRemoteSwing(rp, dt);
+    rp.chuteGroup.visible = alive && !!((o.flags & MPF.FALLING) && (o.flags & MPF.CHUTE));         // falling with the parachute open
+    if (alive && !downed && rp.group.visible && (o.flags & MPF.MOVING) && !(o.flags & (MPF.FALLING | MPF.INCAR)) && o.speed > 0.5) {   // footsteps: same rhythm as yours, quieter the farther away
+      rp.stepT -= dt;
+      if (rp.stepT <= 0) {
+        playFootstep(!!(o.flags & MPF.SPRINT), Math.hypot(o.x - player.pos.x, o.z - player.pos.z));
+        rp.stepT = (o.flags & MPF.CROUCH) ? 0.62 : ((o.flags & MPF.SPRINT) ? 0.27 : 0.42);
+      }
+    } else rp.stepT = 0;
+  }
+  // ----- teammates' guns: what they hold, and how their shots look and sound -----
+  var mpShotEnds = [];                                                        // where the local player's last bullets ended
+  const mpShotOut = { last: 0, pending: 0, type: null, ends: [] };
+  function mpWeaponIndex(t) { return t ? WEAPON_TYPES.indexOf(t) : -1; }     // -1 = nothing in hand
+  function mpSetRemoteGun(rp, type) {
+    if (rp.heldType === type) return;
+    rp.heldType = type;
+    if (!type || !WEAPON_BUILDERS[type]) {
+      if (rp.gunMesh) { rp.wRig.remove(rp.gunMesh); disposeMeshGeometriesOnly(rp.gunMesh); rp.gunMesh = null; }
+      return;
+    }
+    setBotGunMesh(rp, type);                                                  // the same function the bots use to put a gun in their hand
+  }
+  function mpNoteShot(type) {                                                  // called each time the local player fires a gun
+    const o = mpShotOut;
+    o.pending++; o.type = type;
+    if (mpShotEnds.length) o.ends = mpShotEnds.slice(0, 3);
+    mpShotEnds.length = 0;
+  }
+  function mpFlushShots(now) {                                                 // at most ~11 shot messages a second, fast guns are sent as a batch
+    const o = mpShotOut;
+    if (!o.pending || now - o.last < 90) return;
+    o.last = now;
+    const msg = [mpWeaponIndex(o.type), Math.min(4, o.pending)];
+    for (const e of o.ends) msg.push(Math.round(e.p.x * 10), Math.round(e.p.y * 10), Math.round(e.p.z * 10), e.hit ? 1 : 0);
+    if (o.ends.length) mpSendTo('all', 'shot', msg);
+    o.pending = 0; o.ends = [];
+  }
+  function mpSpawnImpact(pos, colorHex, puffOnly) {                            // a bright puff and a few sparks (puffOnly: just the puff, for shotgun pellets), drawn from the same pool as muzzle flashes
+    const core = takeFxSlot(flashPool, flashCursorRef);
+    core.mesh.position.copy(pos); core.mesh.scale.set(3.2, 3.2, 3.2);
+    core.mat.color.setHex(0xffe6a8); core.mat.opacity = 1; core.life = 0.16; core.maxLife = 0.16;
+    for (let i = 0; i < (puffOnly ? 0 : 3); i++) {
+      const sp = takeFxSlot(flashPool, flashCursorRef);
+      sp.mesh.position.set(pos.x + (Math.random() - 0.5) * 0.5, pos.y + Math.random() * 0.35, pos.z + (Math.random() - 0.5) * 0.5);
+      sp.mesh.scale.set(1.3, 1.3, 1.3);
+      sp.mat.color.setHex(colorHex); sp.mat.opacity = 1; sp.life = 0.2; sp.maxLife = 0.2;
+    }
+  }
+  function mpOnMelee(from, d) {                                                // a teammate swung a knife / axe / scythe / bat
+    const rp = mpMatch.remotes.get(from);
+    if (!rp || !Array.isArray(d)) return;
+    const type = WEAPON_TYPES[d[0] | 0], md = MELEE_DEFS[type];
+    if (!md) return;
+    setTimeout(() => {                                                         // same ~110 ms wait as shots, so the swing matches where the teammate is drawn
+      const cur = mpMatch.remotes.get(from);
+      if (!cur || !mpMatch.active || !cur.alive) return;
+      cur.swingT = 1; cur.swingType = type;
+      triggerCharOneShot(cur.charAnim, 'attack', md.rate ? { durationSeconds: md.rate / 1000 } : undefined);
+    }, MP_DELAY_MS);
+  }
+  function mpTickRemoteSwing(rp, dt) {                                         // same arc the local player's weapon makes, applied to the teammate's gun
+    const g = rp.gunMesh;
+    if (!g) return;
+    const md = MELEE_DEFS[rp.heldType];
+    if (!md) return;
+    if (rp.swingT > 0 && rp.swingType === rp.heldType) {
+      const swing = Math.sin((1 - rp.swingT) * Math.PI) * md.swingAmp;
+      if (rp.heldType === 'bat') g.rotation.y = Math.PI / 2 - swing * 1.4 * 0.8; else g.rotation.x = -swing * 0.8;
+      rp.swingT = Math.max(0, rp.swingT - dt * md.swingDecay);
+    } else if (rp.heldType === 'bat') g.rotation.y = Math.PI / 2;
+    else g.rotation.x = 0;
+  }
+  function mpOnShot(from, d) {
+    const rp = mpMatch.remotes.get(from);
+    if (!rp || !Array.isArray(d) || d.length < 6) return;
+    const type = WEAPON_TYPES[d[0] | 0], def = WEAPON_DEFS[type];
+    if (!def) return;
+    const count = Math.max(1, Math.min(4, d[1] | 0));
+    const ends = [];
+    for (let i = 2; i + 3 < d.length && ends.length < 3; i += 4) ends.push({ p: new THREE.Vector3(d[i] / 10, d[i + 1] / 10, d[i + 2] / 10), hit: d[i + 3] === 1 });
+    if (!ends.length) return;
+    const color = def.muzzleColor || 0xffe37a;
+    for (let k = 0; k < count; k++) {
+      setTimeout(() => {                                                       // wait the same ~110 ms the teammate is shown behind, so flash and body match
+        const cur = mpMatch.remotes.get(from);
+        if (!cur || !mpMatch.active || !cur.alive) return;
+        const g = cur.group.position;
+        const muzzle = new THREE.Vector3(g.x, g.y + 1.3, g.z);
+        const dir = ends[0].p.clone().sub(muzzle);
+        if (dir.lengthSq() > 0.01) muzzle.addScaledVector(dir.normalize(), 0.6);
+        for (const e of ends) {
+          spawnTracer(muzzle, e.p, color);
+          if (e.hit && type !== 'flamethrower') mpSpawnImpact(e.p, color);       // sparks where the bullet landed
+        }
+        spawnMuzzleFlash(muzzle, color);
+        playGunshot(type, muzzle.distanceTo(player.pos));
+        triggerCharOneShot(cur.charAnim, 'shoot', { durationSeconds: 0.18 });
+      }, MP_DELAY_MS + k * (90 / count));
+    }
   }
   function mpOnRosterChange() {
     const present = new Set(mp.players.map((q) => q.id));
@@ -11715,11 +12051,24 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       if (!first) mpApplyBotAuthority();
     }
     if (mpMatch.over) mpRefreshEndButtons();
+    const away = new Set((mp.away || []).map((a) => a.id));
+    for (const id of [...mpMatch.awayAlive.keys()]) if (!away.has(id)) mpMatch.awayAlive.delete(id);      // their time ran out
     for (const id of [...mpMatch.remotes.keys()]) {
-      if (!present.has(id)) { const rp = mpMatch.remotes.get(id); mpNotice((rp ? rp.name : 'A player') + ' left the match.'); mpRemoveRemote(id); }
+      if (present.has(id)) continue;
+      const rp = mpMatch.remotes.get(id), wasAway = away.has(id);
+      if (wasAway) mpMatch.awayAlive.set(id, rp ? (rp.alive && !rp.downed) : true);
+      mpNotice((rp ? rp.name : 'A player') + (wasAway ? ' lost connection. Waiting for them to come back...' : ' left the match.'), wasAway ? 5000 : 4000);
+      mpRemoveRemote(id);
     }
-    if (mpMatch.phase === 'playing' && drop.active && !player.falling && mpIsLeader()) {          // leadership may have just passed to us
-      mpEl('mpJumpBtn').style.display = 'block'; mpDropHint('You are now the team leader: tap JUMP when you are over your landing spot.');
+    for (const q of (mpMatch.roster || [])) {                                                    // somebody came back
+      if (q.id === mp.you || !present.has(q.id) || mpMatch.remotes.has(q.id)) continue;
+      mpMatch.remotes.set(q.id, mpMakeRemote(q)); mpMatch.awayAlive.delete(q.id);
+      mpNotice(q.name + ' is back.', 3000);
+    }
+    if (mpMatch.phase === 'playing' && drop.active && !player.falling) {
+      if (mpIsLeader()) {                                                                         // leadership may have just passed to us
+        mpEl('mpJumpBtn').style.display = 'block'; mpDropHint('You are now the team leader: tap JUMP when you are over your landing spot.');
+      } else { mpEl('mpJumpBtn').style.display = 'none'; mpDropHint('Your leader decides when the team jumps.'); }   // (a leader who came back is no longer the leader)
     }
   }
   function mpMatchTick(dt) {                                                  // once per frame, after the player has moved
@@ -11731,12 +12080,14 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       let f = 0;
       if (player.moving) f |= MPF.MOVING; if (player.sprinting) f |= MPF.SPRINT; if (player.crouching) f |= MPF.CROUCH;
       if (player.alive) f |= MPF.ALIVE; if (player.falling) f |= MPF.FALLING; if (player.chuteOpen) f |= MPF.CHUTE;
-      if (firing) f |= MPF.FIRING; if (drop.active && !player.falling) f |= MPF.INPLANE; if (player.inCar) f |= MPF.INCAR;
+      if (firing) f |= MPF.FIRING; if (drop.active && !player.falling) f |= MPF.INPLANE; if (player.inCar) f |= MPF.INCAR; if (player.downed) f |= MPF.DOWNED;
       const r2 = (v) => Math.round(v * 100) / 100;
-      mpSend({ t: 'p', d: [r2(player.pos.x), r2(player.pos.y), r2(player.pos.z), r2(player.yaw), r2(player.pitch), f, Math.max(0, Math.round(player.health)), Math.round(now - mpMatch.t0)] });
+      mpSend({ t: 'p', d: [r2(player.pos.x), r2(player.pos.y), r2(player.pos.z), r2(player.yaw), r2(player.pitch), f, Math.max(0, Math.round(player.health)), Math.round(now - mpMatch.t0), mpWeaponIndex(currentMeshType())] });
     }
+    mpFlushShots(now);
     for (const rp of mpMatch.remotes.values()) mpUpdateRemote(rp, now, dt);
     mpTeamTick(dt, now);
+    mpReviveTick(dt);
   }
   function mpLeaveMatch() { mpStop(); location.reload(); }                    // simplest clean way back to the menu
 
@@ -11759,7 +12110,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // Damage you deal to a bot is sent to the leader; damage bots deal to a teammate is sent to that teammate.
   // The leader also decides when only one team is left and announces the result.
   Object.assign(mpMatch, { bsnaps: [], bclock: [], hitQueue: [], lastHitSend: 0, lastHitBy: {}, shots: [], lastBotSend: 0, lastCheck: 0, lastHud: 0,
-    over: false, spectating: false, specId: null, leaderSeen: null });
+    over: false, spectating: false, specId: null, leaderSeen: null, awayAlive: new Map(), paIds: null, paParts: 0 });
   function mpIsHostSim() { return !mpMatch.active || mpIsLeader(); }
   function mpSendTo(to, k, d) { mpSend({ t: 'fw', to, k, d }); }
   const mpTotalTeams = () => 1 + mpBotTeamCount(mpMatch.teamSize);
@@ -11871,7 +12222,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   function mpFindNearestTarget(bot) {
     let best = null, bestDist = ENGAGE_RANGE;
     const playerEngageR = playerHasSuppressor() ? ENGAGE_RANGE * SUPPRESSOR_DETECT_MULT : ENGAGE_RANGE;
-    if (player.alive) {
+    if (player.alive && !player.downed) {
       const d = bot.pos.distanceTo(player.pos);
       if (d < bestDist && d < playerEngageR && hasLineOfSight(bot.pos, player.pos)) { bestDist = d; best = player; }
     }
@@ -11921,6 +12272,18 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       mpOnFx(d);
     } else if (m.k === 'throw') {
       mpOnThrow(d);
+    } else if (m.k === 'shot') {
+      mpOnShot(m.f, d);
+    } else if (m.k === 'melee') {
+      mpOnMelee(m.f, d);
+    } else if (m.k === 'sync') {
+      mpSendFullWorld(m.f);
+    } else if (m.k === 'rvp') {
+      mpOnRevivePing(m.f, d);
+    } else if (m.k === 'rvx') {
+      mpRv.beingRevivedUntil = 0; mpRv.progress = 0;
+    } else if (m.k === 'rvd') {
+      if (mpMatch.remotes.has(m.f)) mpRevived(m.f);
     }
   }
   // called from killBot() instead of its single-player tail while an online match is running
@@ -11935,8 +12298,9 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     mpUpdateAliveHud();
   }
   function mpCounts() {
-    let realAlive = player.alive ? 1 : 0;
-    for (const rp of mpMatch.remotes.values()) if (rp.alive) realAlive++;
+    let realAlive = (player.alive && !player.downed) ? 1 : 0;                      // downed players are not standing: if nobody is standing the team is out
+    for (const rp of mpMatch.remotes.values()) if (rp.alive && !rp.downed) realAlive++;
+    for (const al of mpMatch.awayAlive.values()) if (al) realAlive++;                 // a teammate who lost connection still counts while they can come back
     const teams = new Set(); let botsAlive = 0;
     for (const b of bots) if (b.alive) { botsAlive++; teams.add(b.team); }
     return { realAlive, botsAlive, botTeams: teams.size };
@@ -12029,12 +12393,276 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
   // MPTEAM-END
 
+  // MPCHAT-BEGIN
+  // ---------- Team text chat (lobby and match) ----------
+  // A chat button on the right edge opens a small box: type and press Enter / SEND, or tap a quick message. Messages from teammates show as a
+  // short list on the left for 10 seconds. The server cleans the text and adds the sender's name. On a keyboard, Enter opens the box.
+  // Anything typed is only ever shown as plain text (never as page code).
+  const MP_CHAT_MAX = 120, MP_CHAT_SHOW_MS = 10000, MP_CHAT_LINES = 7;
+  const MP_CHAT_QUICK = ['Help!', 'Enemy near!', 'Need ammo', 'Follow me', 'Thanks!', 'Nice!'];
+  const MP_CHAT_COLORS = ['#7ff0e0', '#ffd36b', '#ff9aa8', '#b9a4ff', '#9be37a', '#ffa86b'];
+  const MP_CHAT_SMALLBTN = 'font:bold 13px sans-serif;padding:7px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.45);background:rgba(255,255,255,0.12);color:#fff;';
+  const mpChat = { open: false, muted: false, unread: 0, lines: [], lastSent: 0 };
+  try { mpChat.muted = localStorage.getItem('owc_chat_muted') === '1'; } catch (e) { /* private mode: keep the default */ }
+  function mpChatClean(t) { return String(t).replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MP_CHAT_MAX); }
+  function mpChatMk(tag, css, parent) { const e = document.createElement(tag); if (css) e.style.cssText = css; if (parent) parent.appendChild(e); return e; }
+  function mpChatPaintMute() { const b = mpEl('mpChatMute'); if (b) b.textContent = mpChat.muted ? 'Chat: OFF' : 'Chat: ON'; }
+  function mpChatPaintBadge() {
+    const b = mpEl('mpChatBadge'); if (!b) return;
+    b.textContent = mpChat.unread > 9 ? '9+' : String(mpChat.unread);
+    b.style.display = mpChat.unread > 0 ? 'flex' : 'none';
+  }
+  function mpChatUI() {
+    let panel = mpEl('mpChatPanel');
+    if (panel) return panel;
+    const btn = mpChatMk('div', 'position:fixed;right:calc(10px + var(--safe-r, 0px));top:34%;width:42px;height:42px;border-radius:50%;background:rgba(0,0,0,0.55);border:2px solid rgba(255,255,255,0.65);color:#fff;font-size:20px;display:none;align-items:center;justify-content:center;z-index:8800;user-select:none;-webkit-user-select:none;touch-action:manipulation;cursor:pointer;', document.body);
+    btn.id = 'mpChatBtn'; btn.textContent = '💬';
+    const badge = mpChatMk('span', 'position:absolute;top:-5px;right:-5px;min-width:18px;height:18px;border-radius:9px;background:#e33;color:#fff;font:bold 11px sans-serif;display:none;align-items:center;justify-content:center;padding:0 4px;box-sizing:border-box;', btn);
+    badge.id = 'mpChatBadge';
+    btn.addEventListener('click', () => { if (mpChat.open) mpChatClose(); else mpChatOpen(); });
+    const feed = mpChatMk('div', 'position:fixed;left:calc(16px + var(--safe-l, 0px));top:290px;width:min(300px,46vw);z-index:8700;pointer-events:none;display:none;', document.body);
+    feed.id = 'mpChatFeed';
+    panel = mpChatMk('div', 'position:fixed;top:calc(8px + env(safe-area-inset-top, 0px));left:50%;transform:translateX(-50%);width:min(440px,94vw);box-sizing:border-box;padding:10px;border-radius:12px;background:rgba(15,15,25,0.93);border:1px solid rgba(255,255,255,0.35);z-index:8900;display:none;', document.body);
+    panel.id = 'mpChatPanel';
+    const row = mpChatMk('div', 'display:flex;gap:6px;', panel);
+    const input = mpChatMk('input', 'flex:1;min-width:0;font-size:16px;padding:8px 10px;border-radius:8px;border:1px solid #888;background:#111;color:#fff;', row);
+    input.id = 'mpChatInput'; input.type = 'text'; input.maxLength = MP_CHAT_MAX; input.placeholder = 'Message your team...'; input.autocomplete = 'off';
+    input.setAttribute('enterkeyhint', 'send');
+    const send = mpChatMk('button', MP_CHAT_SMALLBTN + 'background:#2d8cff;', row); send.textContent = 'SEND';
+    send.addEventListener('click', () => mpChatSend(input.value));
+    const close = mpChatMk('button', MP_CHAT_SMALLBTN, row); close.textContent = '✕';
+    close.addEventListener('click', mpChatClose);
+    // while typing, the game must not see the keys (W would walk, Space would jump, R would reload...)
+    input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); mpChatSend(input.value); } else if (e.key === 'Escape') { e.preventDefault(); mpChatClose(); } });
+    input.addEventListener('keyup', (e) => e.stopPropagation());
+    input.addEventListener('keypress', (e) => e.stopPropagation());
+    const quick = mpChatMk('div', 'display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;', panel);
+    for (const q of MP_CHAT_QUICK) { const b = mpChatMk('button', MP_CHAT_SMALLBTN, quick); b.textContent = q; b.addEventListener('click', () => mpChatSend(q)); }
+    const mute = mpChatMk('button', MP_CHAT_SMALLBTN + 'margin-left:auto;', quick); mute.id = 'mpChatMute';
+    mute.addEventListener('click', () => {
+      mpChat.muted = !mpChat.muted;
+      try { localStorage.setItem('owc_chat_muted', mpChat.muted ? '1' : '0'); } catch (e) { /* ignore */ }
+      if (mpChat.muted) { for (const o of mpChat.lines) o.el.remove(); mpChat.lines.length = 0; mpChat.unread = 0; mpChatPaintBadge(); }
+      mpChatPaintMute();
+    });
+    mpChatPaintMute();
+    return panel;
+  }
+  function mpChatOpen() {
+    const panel = mpChatUI();
+    mpChat.open = true; mpChat.unread = 0; mpChatPaintBadge();
+    panel.style.display = 'block';
+    clearAllKeys();                                                // stop walking / shooting while typing
+    try { document.exitPointerLock && document.exitPointerLock(); } catch (e) { /* ignore */ }
+    mpEl('mpChatInput').focus();
+  }
+  function mpChatClose() {
+    mpChat.open = false;
+    const panel = mpEl('mpChatPanel'); if (panel) panel.style.display = 'none';
+    const input = mpEl('mpChatInput'); if (input) input.blur();
+  }
+  function mpChatAddLine(name, text, color) {
+    mpChatUI();
+    const feed = mpEl('mpChatFeed');
+    const line = mpChatMk('div', 'margin-top:4px;padding:4px 8px;border-radius:8px;background:rgba(0,0,0,0.6);color:#fff;font:14px sans-serif;word-break:break-word;', feed);
+    const nm = mpChatMk('b', 'color:' + color + ';', line); nm.textContent = name + ': ';
+    line.appendChild(document.createTextNode(text));
+    mpChat.lines.push({ el: line, t: Date.now() });
+    while (mpChat.lines.length > MP_CHAT_LINES) mpChat.lines.shift().el.remove();
+  }
+  function mpChatSend(text) {
+    const t = mpChatClean(text || '');
+    if (!t) return;
+    if (!mp.ws || mp.ws.readyState !== 1) { mpNotice('Not connected.', 2000); return; }
+    const now = Date.now();
+    if (now - mpChat.lastSent < 700) return;                       // same limit the server uses (the text stays in the box)
+    mpChat.lastSent = now;
+    mpSend({ t: 'chat', m: t });
+    mpChatAddLine('You', t, '#9be37a');
+    mpEl('mpChatInput').value = '';
+    mpChatClose();
+  }
+  function mpChatReceive(m) {
+    if (mpChat.muted || typeof m.m !== 'string') return;
+    const t = mpChatClean(m.m); if (!t) return;
+    const name = mpChatClean(typeof m.n === 'string' ? m.n : 'Player').slice(0, 24) || 'Player';
+    mpChatAddLine(name, t, MP_CHAT_COLORS[Math.abs(m.f | 0) % MP_CHAT_COLORS.length]);
+    if (!mpChat.open) { mpChat.unread++; mpChatPaintBadge(); }
+  }
+  function mpChatRefresh() {                                       // twice a second: show the button only while connected, fade old lines
+    const connected = mp.you !== null && !!mp.ws && !mp.rc.on;
+    if (!connected) {
+      const b = mpEl('mpChatBtn');
+      if (b) { b.style.display = 'none'; mpEl('mpChatFeed').style.display = 'none'; if (mpChat.open) mpChatClose(); }
+      if (mpChat.lines.length) { for (const o of mpChat.lines) o.el.remove(); mpChat.lines.length = 0; }
+      if (mpChat.unread) { mpChat.unread = 0; mpChatPaintBadge(); }
+      return;
+    }
+    mpChatUI();
+    mpEl('mpChatBtn').style.display = 'flex'; mpEl('mpChatFeed').style.display = 'block';
+    if (mpChat.open) return;
+    const now = Date.now();
+    for (let i = mpChat.lines.length - 1; i >= 0; i--) {
+      if (now - mpChat.lines[i].t > MP_CHAT_SHOW_MS) { mpChat.lines[i].el.remove(); mpChat.lines.splice(i, 1); }
+    }
+  }
+  setInterval(mpChatRefresh, 500);
+  window.addEventListener('keydown', (e) => {                      // keyboard: Enter opens the chat box
+    if (e.code !== 'Enter' || mpChat.open || e.metaKey || e.ctrlKey || e.altKey) return;
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || !mpEl('mpChatBtn') || mpEl('mpChatBtn').style.display === 'none') return;
+    e.preventDefault(); mpChatOpen();
+  });
+  // MPCHAT-END
+  // MPREVIVE-BEGIN
+  // ---------- Online match: a downed teammate can be revived ----------
+  // When your health reaches 0 and at least one teammate is still standing you go DOWN instead of dying: you crawl slowly, cannot
+  // shoot / build / throw / pick things up, bots ignore you, and you bleed out after MP_BLEED_OUT_SECONDS (the clock pauses while
+  // somebody is reviving you). A teammate within MP_REVIVE_RANGE holds REVIVE for MP_REVIVE_SECONDS to pick you up. Taking damage,
+  // shooting, letting go or walking away restarts their 20 seconds. If no teammate is left standing a downed player dies.
+  const MP_REVIVE_SECONDS = 20, MP_REVIVE_RANGE = 3, MP_BLEED_OUT_SECONDS = 90, MP_REVIVE_HEALTH = 30;
+  const mpRv = { bleed: 0, beingRevivedUntil: 0, progress: 0, reviverName: '', target: null, t: 0, btnHeld: false, lastSend: 0, ignoreId: null, ignoreUntil: 0, ui: {} };
+  function mpHasStandingTeammate() {
+    for (const rp of mpMatch.remotes.values()) if (rp.alive && !rp.downed) return true;
+    for (const al of mpMatch.awayAlive.values()) if (al) return true;                          // somebody who lost connection may still come back
+    return false;
+  }
+  function mpCharStandUp(ca) {                                                                  // from lying down back to the normal animations
+    if (!ca) return;
+    if (ca.actions.dead) ca.actions.dead.stop();
+    ca.mode = 'loop'; ca.loopState = null; ca.activeLoopAction = null; ca.oneshotKey = null;
+    if (ca.actions.arise) triggerCharOneShot(ca, 'arise', { clampLast: false });
+  }
+  function mpGoDown() {                                                                          // returns true when the player went down instead of dying
+    if (!mpMatch.active || mpMatch.over || mpMatch.phase !== 'playing' || player.downed || !mpHasStandingTeammate()) return false;
+    player.downed = true; player.health = 0; updateHealthUI();
+    mpRv.bleed = MP_BLEED_OUT_SECONDS; mpRv.beingRevivedUntil = 0; mpRv.progress = 0; mpRv.reviverName = '';
+    mpReviveInterrupt();
+    firing = false; document.getElementById('fireBtn').classList.remove('engaged');
+    endScope();
+    triggerCharOneShot(player.charAnim, 'dead', { clampLast: true });
+    mpNotice('You are down! A teammate can revive you.', 4000);
+    return true;
+  }
+  function mpDownedDie(label) {
+    player.downed = false;
+    lastDamageInfo = { pos: null, label, weapon: null };
+    mpRvHideUI();
+    playerDie();
+  }
+  function mpRevived(fromId) {
+    if (!player.downed || !player.alive) return;
+    player.downed = false; player.health = MP_REVIVE_HEALTH; updateHealthUI();
+    mpCharStandUp(player.charAnim);
+    mpRv.beingRevivedUntil = 0; mpRv.progress = 0;
+    const rp = mpMatch.remotes.get(fromId);
+    mpNotice('Revived by ' + (rp ? rp.name : 'a teammate') + '!', 3500);
+    mpRvHideUI();
+  }
+  function mpOnRevivePing(fromId, d) {                                                           // the teammate who is reviving us reports how far they are
+    const rp = mpMatch.remotes.get(fromId);
+    if (!player.downed || !rp || !Array.isArray(d)) return;
+    mpRv.beingRevivedUntil = performance.now() + 1200;
+    mpRv.progress = Math.max(0, Math.min(1, (+d[0] || 0) / 1000));
+    mpRv.reviverName = rp.name;
+  }
+  function mpReviveInterrupt() {                                                                 // you took a hit / fired / let go / walked away: the 20 seconds start over
+    if (mpRv.target === null) return;
+    if (mpMatch.active) mpSendTo(mpRv.target, 'rvx', null);
+    mpRv.target = null; mpRv.t = 0;
+  }
+  function mpRvReset() {
+    player.downed = false;
+    mpRv.bleed = 0; mpRv.beingRevivedUntil = 0; mpRv.progress = 0; mpRv.target = null; mpRv.t = 0; mpRv.btnHeld = false; mpRv.ignoreId = null; mpRv.ignoreUntil = 0;
+    mpRvHideUI();
+  }
+
+  function mpRvMake(id, css, tag) {
+    let el = mpEl(id);
+    if (!el) { el = document.createElement(tag || 'div'); el.id = id; el.style.cssText = css; document.body.appendChild(el); }
+    return el;
+  }
+  function mpRvText(el, text) { if (el.textContent !== text) el.textContent = text; }
+  function mpRvBar(id, show, text, frac, color) {                                                // a text line with a progress bar under it
+    const box = mpRvMake(id, 'position:fixed;left:50%;transform:translateX(-50%);width:min(300px,80vw);text-align:center;color:#fff;font:bold 16px sans-serif;text-shadow:0 1px 3px #000;z-index:8600;pointer-events:none;display:none;');
+    if (!box.firstChild) {
+      const t = document.createElement('div'); t.className = 'rvT'; box.appendChild(t);
+      const bar = document.createElement('div'); bar.style.cssText = 'margin-top:6px;height:12px;border-radius:6px;background:rgba(0,0,0,0.6);border:1px solid rgba(255,255,255,0.6);overflow:hidden;';
+      const fill = document.createElement('div'); fill.className = 'rvF'; fill.style.cssText = 'height:100%;width:0%;background:' + color + ';'; bar.appendChild(fill); box.appendChild(bar);
+    }
+    box.style.display = show ? 'block' : 'none';
+    if (show) { mpRvText(box.firstChild, text); box.querySelector('.rvF').style.width = Math.round(Math.max(0, Math.min(1, frac)) * 100) + '%'; }
+    return box;
+  }
+  function mpRvHideUI() {
+    for (const id of ['mpDownOverlay', 'mpDownBar', 'mpReviveBar', 'mpReviveBtn']) { const el = mpEl(id); if (el) el.style.display = 'none'; }
+    mpRv.btnHeld = false;
+  }
+  function mpRvButton(show) {
+    const el = mpRvMake('mpReviveBtn', 'position:fixed;left:50%;bottom:150px;transform:translateX(-50%);padding:16px 26px;border-radius:14px;background:rgba(255,140,40,0.85);border:3px solid #fff;color:#fff;font:bold 20px sans-serif;z-index:8700;display:none;touch-action:none;user-select:none;-webkit-user-select:none;');
+    if (!el.dataset.ready) {
+      el.dataset.ready = '1'; el.textContent = 'HOLD TO REVIVE';
+      const down = (e) => { e.preventDefault(); mpRv.btnHeld = true; };
+      const up = () => { mpRv.btnHeld = false; };
+      el.addEventListener('touchstart', down, { passive: false }); el.addEventListener('touchend', up); el.addEventListener('touchcancel', up);
+      el.addEventListener('mousedown', down); el.addEventListener('mouseup', up); el.addEventListener('mouseleave', up);
+    }
+    el.style.display = show ? 'block' : 'none';
+    if (!show && !(keys[keyBindings.revive])) mpRv.btnHeld = false;
+  }
+
+  function mpReviveTick(dt) {                                                                    // once per frame during an online match
+    if (!mpMatch.active || mpMatch.over || mpMatch.phase !== 'playing') { if (!mpMatch.active) mpRvHideUI(); return; }
+    const now = performance.now();
+    // ----- I am downed -----
+    if (player.downed) {
+      if (!mpHasStandingTeammate()) { mpDownedDie('No teammates left standing'); return; }
+      const beingRevived = now < mpRv.beingRevivedUntil;
+      if (!beingRevived) mpRv.bleed -= dt;
+      if (mpRv.bleed <= 0) { mpDownedDie('Bled out'); return; }
+      const ov = mpRvMake('mpDownOverlay', 'position:fixed;top:0;left:0;right:0;bottom:0;box-shadow:inset 0 0 140px 50px rgba(200,0,0,0.55);pointer-events:none;z-index:8500;display:none;');
+      ov.style.display = 'block';
+      const bar = mpRvBar('mpDownBar', true, beingRevived ? (mpRv.reviverName || 'A teammate') + ' is reviving you...' : 'YOU ARE DOWN - bleeding out in ' + Math.ceil(mpRv.bleed) + 's', beingRevived ? mpRv.progress : mpRv.bleed / MP_BLEED_OUT_SECONDS, beingRevived ? '#5fff7a' : '#ff5a4a');
+      bar.style.top = '18%';
+      mpRvBar('mpReviveBar', false, '', 0, '#ff9a3d'); mpRvButton(false);
+      return;
+    }
+    const ov = mpEl('mpDownOverlay'); if (ov && ov.style.display !== 'none') { ov.style.display = 'none'; mpRvBar('mpDownBar', false, '', 0, '#fff'); }
+    // ----- a teammate is downed near me -----
+    let near = null;
+    if (player.alive && !drop.active) {
+      let nd = MP_REVIVE_RANGE;
+      for (const rp of mpMatch.remotes.values()) {
+        if (!rp.alive || !rp.downed || !rp.hasOut || (rp.id === mpRv.ignoreId && now < mpRv.ignoreUntil)) continue;
+        const d = Math.hypot(rp.out.x - player.pos.x, rp.out.z - player.pos.z);
+        if (d < nd && Math.abs(rp.out.y - player.pos.y) < 2.5) { nd = d; near = rp; }
+      }
+    }
+    mpRvButton(!!near);
+    const hold = mpRv.btnHeld || !!keys[keyBindings.revive];
+    if (near && hold) {
+      if (mpRv.target !== near.id) { mpRv.target = near.id; mpRv.t = 0; mpRv.lastSend = 0; }
+      mpRv.t += dt;
+      if (now - mpRv.lastSend >= 250) { mpRv.lastSend = now; mpSendTo(near.id, 'rvp', [Math.min(1000, Math.round(mpRv.t / MP_REVIVE_SECONDS * 1000))]); }
+      if (mpRv.t >= MP_REVIVE_SECONDS) {
+        mpSendTo(near.id, 'rvd', null);
+        mpNotice('You revived ' + near.name + '!', 3000);
+        mpRv.ignoreId = near.id; mpRv.ignoreUntil = now + 2000;                                  // their "downed" flag takes a moment to clear
+        mpRv.target = null; mpRv.t = 0; mpRv.btnHeld = false;
+      }
+      mpRvBar('mpReviveBar', true, 'Reviving ' + near.name + '... ' + Math.max(0, MP_REVIVE_SECONDS - mpRv.t).toFixed(1) + 's', mpRv.t / MP_REVIVE_SECONDS, '#ff9a3d').style.bottom = '215px';
+    } else {
+      if (mpRv.target !== null) mpReviveInterrupt();                                              // let go or walked away
+      mpRvBar('mpReviveBar', false, '', 0, '#ff9a3d');
+    }
+  }
+  // MPREVIVE-END
   // MPWORLD-BEGIN
   // ---------- Online match: shared loot, built pieces and the storm ----------
   // Loot: every device creates the SAME loot at match start (shared seed). After that, any change (picked up,
   // respawned, a gun dropped, a wall built or broken) is announced to the others ~10 times a second.
   // The storm: the leader's device runs the real one and sends its state every second; the others copy it.
-  Object.assign(mpMatch, { dropSeq: 0, pieceSeq: 0, pkNew: [], pwNew: [], pbNew: [], lootById: new Map(), pieceById: new Map(), lastLootSend: 0, lastZoneSend: 0, mute: false });
+  Object.assign(mpMatch, { dropSeq: 0, pieceSeq: 0, pkNew: [], pwNew: [], pbNew: [], pdNew: new Map(), lootById: new Map(), pieceById: new Map(), lastLootSend: 0, lastZoneSend: 0, mute: false });
   mpReady = true;
   const r2w = (v) => Math.round(v * 100) / 100;
 
@@ -12043,7 +12671,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     pickups.length = 0;
     ammoCrates.length = 0;
     if (crateBoxMesh) scene.remove(crateBoxMesh, crateStripeMesh);
-    Object.assign(mpMatch, { dropSeq: 0, pieceSeq: 0, pkNew: [], pwNew: [], pbNew: [], lootById: new Map(), pieceById: new Map(), lastLootSend: 0, lastZoneSend: 0 });
+    Object.assign(mpMatch, { dropSeq: 0, pieceSeq: 0, pkNew: [], pwNew: [], pbNew: [], pdNew: new Map(), lootById: new Map(), pieceById: new Map(), lastLootSend: 0, lastZoneSend: 0 });
     mpMatch.mute = true;
     const orig = Math.random;
     Math.random = mpRng(((mpMatch.seed ^ 0xC0FFEE) + 0x1234567) >>> 0);      // same loot (spots and items) on every device
@@ -12059,11 +12687,16 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   function mpOnPiecePlaced(entry, type, tier, pos, yaw) {
     if (!mpReady || !mpMatch.active || mpMatch.mute || !entry) return;
     entry.nid = 'W' + mp.you + '-' + (++mpMatch.pieceSeq); mpMatch.pieceById.set(entry.nid, entry);
-    mpMatch.pwNew.push([entry.nid, type, tier, r2w(pos.x), r2w(pos.y || 0), r2w(pos.z), r2w(yaw)]);
+    const rec = [entry.nid, type, tier, r2w(pos.x), r2w(pos.y || 0), r2w(pos.z), r2w(yaw)];
+    entry.mpRec = rec; mpMatch.pwNew.push(rec);
   }
   function mpOnPieceBroken(entry) {
     if (!mpReady || !mpMatch.active || mpMatch.mute || !entry || !entry.nid) return;
     mpMatch.pbNew.push(entry.nid); mpMatch.pieceById.delete(entry.nid);
+  }
+  function mpOnPieceDamaged(entry, dmg) {                                      // adds up damage per wall until the next send
+    if (!mpReady || !mpMatch.active || mpMatch.mute || !entry || !entry.nid || !(dmg > 0)) return;
+    mpMatch.pdNew.set(entry.nid, (mpMatch.pdNew.get(entry.nid) || 0) + dmg);
   }
   function mpSetLootActive(e, a) {
     e.active = a;
@@ -12076,7 +12709,43 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     for (const p of pickups) { if (s.length >= 40) break; if (p.nid !== undefined && p.net !== p.active) { p.net = p.active; s.push([p.nid, p.active ? 1 : 0]); } }
     for (const c of ammoCrates) { if (s.length >= 40) break; if (c.nid !== undefined && c.net !== c.active) { c.net = c.active; s.push([c.nid, c.active ? 1 : 0]); } }
     const n = mpMatch.pkNew.splice(0, 8), pw = mpMatch.pwNew.splice(0, 12), pb = mpMatch.pbNew.splice(0, 20);
-    if (s.length || n.length || pw.length || pb.length) mpSendTo('all', 'world', { s, n, pw, pb });
+    const pd = [];
+    for (const [id, v] of mpMatch.pdNew) { if (pd.length >= 20) break; pd.push([id, Math.round(v * 10) / 10]); mpMatch.pdNew.delete(id); }
+    if (s.length || n.length || pw.length || pb.length || pd.length) mpSendTo('all', 'world', { s, n, pw, pb, pd });
+  }
+  const mpSyncBusy = new Set();
+  function mpSendFullWorld(toId) {                                             // a teammate came back after a dropped connection: send them the world as it is now
+    if (!mpReady || !mpMatch.active || mpMatch.phase !== 'playing' || !Number.isInteger(toId) || toId === mp.you || mpSyncBusy.has(toId)) return;
+    const qn = [], qp = [], qh = [], qa = [], qs = [];
+    const add = (q, key, entry) => {                                          // pack entries into messages well under the server's 2000-character limit
+      let c = q[q.length - 1];
+      if (!c || JSON.stringify(c.v).length > 900) { c = { k: key, v: [] }; q.push(c); }
+      c.v.push(entry);
+    };
+    for (const p of pickups) {                                                // guns lying around that were dropped during the match
+      if (p.nid === undefined || String(p.nid)[0] !== 'D' || !p.active) continue;
+      let cs = p.carryState || 0; if (cs && JSON.stringify(cs).length > 500) cs = 0;
+      add(qn, 'n', [p.nid, p.type, r2w(p.x), r2w(p.y), r2w(p.z), 0, cs]);
+    }
+    const ids = [];
+    for (const e of builtPieces) {                                            // walls, floors, ramps and how damaged they are
+      if (!e.nid || !e.mpRec) continue;
+      ids.push(e.nid); add(qp, 'pw', e.mpRec);
+      const full = TIERS[e.tier] && TIERS[e.tier].hp;
+      if (full && e.health < full) add(qh, 'ph', [e.nid, Math.max(1, Math.round(e.health * 10) / 10)]);
+    }
+    const parts = Math.max(1, Math.ceil(ids.length / 100));
+    for (let i = 0; i < parts; i++) qa.push({ k: 'pa', v: { i, n: parts, ids: ids.slice(i * 100, i * 100 + 100) } });
+    for (const p of pickups) if (p.nid !== undefined) add(qs, 's', [p.nid, p.active ? 1 : 0]);        // which loot is still there
+    for (const c of ammoCrates) if (c.nid !== undefined) add(qs, 's', [c.nid, c.active ? 1 : 0]);
+    const all = [...qn, ...qp, ...qh, ...qa, ...qs];            // new guns, new walls, wall health, which walls still exist, which loot is still there
+    mpSyncBusy.add(toId);
+    let i = 0;
+    const timer = setInterval(() => {                                         // one message every 150 ms so the server's flood guard is never hit
+      if (!mpMatch.active || i >= all.length) { clearInterval(timer); mpSyncBusy.delete(toId); return; }
+      const c = all[i++], d = {}; d[c.k] = c.v;
+      mpSendTo(toId, 'world', d);
+    }, 150);
   }
   function mpOnWorld(d) {
     mpMatch.mute = true;                                                       // what we copy must not be announced again
@@ -12089,9 +12758,28 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       for (const w of (d.pw || [])) {
         if (mpMatch.pieceById.has(w[0])) continue;
         const e = placeStructure(w[1], w[2], new THREE.Vector3(w[3], w[4], w[5]), w[6]);
-        if (e) { e.nid = w[0]; mpMatch.pieceById.set(e.nid, e); }
+        if (e) { e.nid = w[0]; e.mpRec = w; mpMatch.pieceById.set(e.nid, e); }
       }
       for (const [id, a] of (d.s || [])) { const e = mpMatch.lootById.get(id); if (e) { e.net = !!a; mpSetLootActive(e, !!a); } }
+      for (const [id, hp] of (d.ph || [])) { const e = mpMatch.pieceById.get(id); if (e && builtPieces.includes(e) && hp > 0) e.health = hp; }   // exact health (full resync)
+      if (d.pa && Array.isArray(d.pa.ids)) {                                   // full resync: every wall that exists; any other wall of a teammate is gone
+        if (!mpMatch.paIds || d.pa.i === 0) { mpMatch.paIds = new Set(); mpMatch.paParts = 0; }
+        for (const id of d.pa.ids) mpMatch.paIds.add(id);
+        if (++mpMatch.paParts >= d.pa.n) {
+          const mine = 'W' + mp.you + '-';
+          for (const [id, e] of [...mpMatch.pieceById]) {
+            if (mpMatch.paIds.has(id) || String(id).startsWith(mine) || !builtPieces.includes(e)) continue;
+            breakBuiltPiece(e); mpMatch.pieceById.delete(id);
+          }
+          mpMatch.paIds = null;
+        }
+      }
+      for (const [id, dmg] of (d.pd || [])) {                                  // a teammate damaged a wall: apply the same damage here
+        const e = mpMatch.pieceById.get(id);
+        if (!e || !builtPieces.includes(e) || !(dmg > 0)) continue;
+        e.health -= Math.min(dmg, 1000);
+        if (e.health <= 0) breakBuiltPiece(e);                                 // both of us may have finished it at the same moment: each device breaks its own copy
+      }
       for (const id of (d.pb || [])) { const e = mpMatch.pieceById.get(id); if (e && builtPieces.includes(e)) breakBuiltPiece(e); mpMatch.pieceById.delete(id); }
     } finally { mpMatch.mute = false; }
   }
@@ -12391,6 +13079,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     // input mid-air just does nothing rather than fighting the fall.
     // Ctrl always works as a crouch fallback even if the bound key is changed.
     player.crouching = !!(keys[keyBindings.crouch] || keys['ControlLeft'] || keys['ControlRight'] || mobileCrouchHeld) && player.grounded;
+    if (player.downed) player.crouching = true;                   // online: a downed player crawls (crouched pose, slow)
 
     const wantsSprint = !!keys[keyBindings.sprint] && len > 0.001 && !isScoped && !player.crouching;
     if (wantsSprint && player.stamina > 0) {
@@ -12412,7 +13101,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     // real risk in grabbing it and sprinting straight home, and defenders
     // have basically no way to catch a carrier who's already past them.
     const flagSpeedMult = (gameMode === 'ctf' && ctfState.enemyFlag.carrier === 'player') ? 0.85 : 1;
-    const speedMult = (player.crouching ? 0.45 : (player.sprinting ? player.sprintMult : 1)) * weaponSpeedMult * flagSpeedMult;
+    const speedMult = (player.crouching ? 0.45 : (player.sprinting ? player.sprintMult : 1)) * weaponSpeedMult * flagSpeedMult * (player.downed ? 0.6 : 1);
     updateStaminaUI();
     updateSpeedEffects(dt);
 
@@ -12431,7 +13120,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
     // Footsteps: timer-based, cadence depends on sprint/crouch/walk, only
     // while actually moving on the ground (not mid-air or in a menu).
-    if (len > 0.001 && player.grounded && !invOpen && !layoutEditMode) {
+    if (len > 0.001 && player.grounded && !invOpen && !layoutEditMode && !player.downed) {
       footstepTimer -= dt;
       if (footstepTimer <= 0) {
         playFootstep(player.sprinting);
@@ -12494,7 +13183,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
     playerGroup.position.set(player.pos.x, player.pos.y, player.pos.z);
 
-    if (player.health < player.maxHealth) {
+    if (player.health < player.maxHealth && !player.downed) {
       regenAccumulator += dt;
       if (regenAccumulator > 5) { player.health = Math.min(player.maxHealth, player.health + dt*2); updateHealthUI(); }
     } else regenAccumulator = 0;
@@ -12680,8 +13369,23 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
   // ---------- FPS counter ----------
   const fpsCounterEl = document.getElementById('fpsCounter');
+  const fpsValEl = document.getElementById('fpsVal'), pingValEl = document.getElementById('pingVal'), pingSepEl = document.getElementById('pingSep');
+  const perfToggleBtn = document.getElementById('perfToggleBtn');
+  try { settings.showPerf = localStorage.getItem('owc_show_perf') !== '0'; } catch (e) { settings.showPerf = true; }   // on unless you turned it off
+  function applyPerfIndicator() {
+    fpsCounterEl.style.display = settings.showPerf ? '' : 'none';
+    perfToggleBtn.textContent = settings.showPerf ? 'ON' : 'OFF';
+    perfToggleBtn.classList.toggle('off', !settings.showPerf);
+  }
+  bindTap(perfToggleBtn, () => {
+    settings.showPerf = !settings.showPerf;
+    try { localStorage.setItem('owc_show_perf', settings.showPerf ? '1' : '0'); } catch (e) { /* private mode: lasts until reload */ }
+    applyPerfIndicator();
+  });
+  applyPerfIndicator();
   let fpsAccum = 0, fpsFrames = 0;
   function updateFpsCounter(dt) {
+    if (!settings.showPerf) return;
     // frames-per-real-second over a window, not an average of per-frame
     // 1/dt readings — averaging reciprocals skews high whenever frame
     // times jitter even slightly (Jensen's inequality), which is why the
@@ -12689,9 +13393,14 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     fpsAccum += dt; fpsFrames++;
     if (fpsAccum >= 0.5) { // refresh the on-screen text twice a second
       const fps = Math.round(fpsFrames / fpsAccum);
-      fpsCounterEl.textContent = fps + ' FPS';
+      fpsValEl.textContent = fps + ' FPS';
       fpsCounterEl.classList.toggle('low', fps < 30);
       fpsAccum = 0; fpsFrames = 0;
+      const pv = mpPingView();                                      // ping appears only while you are in an online room
+      pingSepEl.style.display = pingValEl.style.display = pv ? '' : 'none';
+      if (pv) { pingValEl.textContent = pv.text; pingValEl.style.color = pv.color; }
+      const tag = document.getElementById('dbgBuildTag');          // sits on the same row, right of the green build tag (clear of the joystick)
+      fpsCounterEl.style.left = tag ? Math.ceil(tag.getBoundingClientRect().right + 6) + 'px' : '';
     }
   }
 
