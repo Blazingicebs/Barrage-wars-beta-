@@ -174,14 +174,16 @@ const PAGE = `<!doctype html>
 //    GET  /mp/admin/status   (token) rooms, usage, limits
 //    POST /mp/admin/enable   (token) turn multiplayer on/off (off = kick everyone)
 //    POST /mp/admin/kickall  (token) close every room, stay on
-//    POST /mp/admin/limits   (token) change limits
+//    POST /mp/admin/limits   (token) change limits (also the "only teams I host" switch)
+//    POST /mp/admin/kick     (token) remove one player from a room
+//    POST /mp/admin/ticket   (token) a one-time pass so a room you create counts as hosted by you
 //
 //  The admin password is NOT in this file. It lives in a Cloudflare secret
 //  named ADMIN_PASSWORD (Worker -> Settings -> Variables and Secrets).
 // ============================================================================
 import { DurableObject } from 'cloudflare:workers';
 
-const SERVER_VERSION = 'online-match-v2';   // the game checks this, so an out-of-date server is spotted straight away
+const SERVER_VERSION = 'online-match-v6';   // the game checks this, so an out-of-date server is spotted straight away
 
 const DEFAULT_CFG = {
   enabled: true,
@@ -191,9 +193,15 @@ const DEFAULT_CFG = {
   playerIdleSeconds: 75,    // a player we hear nothing from for this long is dropped
   maxRoomSeconds: 3 * 3600, // hard cap on a room's lifetime
   disabledReason: '',
+  hostOnly: false,          // true = only rooms the owner hosts can be created or joined
 };
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I, O, 0, 1
 const CLOSE = { OFF: 4001, IDLE: 4004, FULL: 4003, NOROOM: 4005, BUDGET: 4006, RATE: 4008, KICK: 4009, LEFT: 1000 };
+// Rejoin: a player whose connection drops DURING a match keeps their place for this long and can come back with their secret key.
+const REJOIN_GRACE_MS = 120000;
+// Closing with one of these codes means "I meant to leave" (or the server sent them away on purpose): no place is kept.
+const NO_REJOIN_CODES = [1000, CLOSE.OFF, CLOSE.FULL, CLOSE.NOROOM, CLOSE.BUDGET, CLOSE.RATE, CLOSE.KICK];
+function newToken() { const a = crypto.getRandomValues(new Uint8Array(12)); return Array.from(a, (b) => b.toString(16).padStart(2, '0')).join(''); }
 const TOKEN_LIFETIME_MS = 2 * 3600 * 1000;
 const CORS = {
   'access-control-allow-origin': '*',
@@ -251,7 +259,7 @@ export class Control extends DurableObject {
   }
 
   // Called by the Worker before a WebSocket is handed to a room.
-  async authorize(create, code, size) {
+  async authorize(create, code, size, ticket, rejoin) {
     const c = await this.cfg();
     const u = await this.addUnits(1);
     if (!c.enabled) return { ok: false, close: CLOSE.OFF, error: c.disabledReason || 'Multiplayer is turned off right now' };
@@ -261,14 +269,18 @@ export class Control extends DurableObject {
     }
     const rooms = await this.rooms();
     this.sweep(rooms, c);
+    const owner = create ? await this.consumeTicket(ticket) : false;          // did the owner (unlocked in the admin panel) create this room?
     if (create) {
+      if (c.hostOnly && !owner) return { ok: false, close: CLOSE.FULL, error: 'Only the owner can host teams right now. Ask them for a room code.' };
       if (Object.keys(rooms).length >= c.maxRooms) return { ok: false, close: CLOSE.FULL, error: 'All rooms are busy right now. Try again in a few minutes.' };
       let k = ''; do { k = newCode(); } while (rooms[k]);
-      rooms[k] = { createdAt: Date.now(), updatedAt: Date.now(), players: 0 };
+      rooms[k] = { createdAt: Date.now(), updatedAt: Date.now(), players: 0, owner, list: [] };
       await this.ctx.storage.put('rooms', rooms);
       return { ok: true, code: k, size: size === 2 ? 2 : 3, create: true };
     }
     if (!rooms[code]) return { ok: false, close: CLOSE.NOROOM, error: 'No room with that code.' };
+    // "only teams I host": nobody new may join a room the owner did not create (a player who dropped may still come back to their own room)
+    if (c.hostOnly && !rejoin && !rooms[code].owner) return { ok: false, close: CLOSE.NOROOM, error: 'Only teams hosted by the owner can be joined right now.' };
     return { ok: true, code, create: false };
   }
 
@@ -282,12 +294,16 @@ export class Control extends DurableObject {
   }
 
   // Rooms report their player count and the budget they used.
-  async roomUpdate(code, players, units) {
+  async roomUpdate(code, players, units, list) {
     const u = await this.addUnits(units + 1);
     const c = await this.cfg();
     const rooms = await this.rooms();
     if (rooms[code]) {
-      if (players <= 0) delete rooms[code]; else { rooms[code].players = players; rooms[code].updatedAt = Date.now(); }
+      if (players <= 0) delete rooms[code];
+      else {
+        rooms[code].players = players; rooms[code].updatedAt = Date.now();
+        if (Array.isArray(list)) rooms[code].list = list.slice(0, 8).map((x) => ({ id: Number.parseInt(x.id, 10) || 0, name: String(x.name || '').slice(0, 24), away: !!x.away }));
+      }
       await this.ctx.storage.put('rooms', rooms);
     }
     if (u.units >= c.dailyBudget && c.enabled) await this.disable('Daily online budget used up. It resets at 00:00 UTC.');
@@ -350,7 +366,7 @@ export class Control extends DurableObject {
     return {
       ok: true, enabled: c.enabled, reason: c.disabledReason, cfg: c,
       usage: { day: u.day, units: Math.round(u.units), budget: c.dailyBudget },
-      rooms: Object.keys(rooms).map((k) => ({ code: k, players: rooms[k].players, ageSeconds: Math.round((Date.now() - rooms[k].createdAt) / 1000) })),
+      rooms: Object.keys(rooms).map((k) => ({ code: k, players: rooms[k].players, owner: !!rooms[k].owner, list: rooms[k].list || [], ageSeconds: Math.round((Date.now() - rooms[k].createdAt) / 1000) })),
     };
   }
   async adminSetEnabled(token, on) {
@@ -358,6 +374,37 @@ export class Control extends DurableObject {
     if (on) { const c = await this.cfg(); c.enabled = true; c.disabledReason = ''; await this.saveCfg(c); }
     else await this.disable('Multiplayer was turned off by the owner.');
     return this.adminStatus(token);
+  }
+  // A one-time pass (valid 60 s). The game asks for one right before creating a room, so the room counts as hosted by the owner
+  // without the long-lived admin token ever appearing in a web address.
+  async adminTicket(token) {
+    if (!(await this.checkToken(token))) return { ok: false, auth: false };
+    const t = hex(crypto.getRandomValues(new Uint8Array(16)));
+    const tickets = (await this.ctx.storage.get('tickets')) || {};
+    const now = Date.now();
+    for (const k of Object.keys(tickets)) if (tickets[k] < now) delete tickets[k];
+    tickets[await sha256Hex(t)] = now + 60000;
+    await this.ctx.storage.put('tickets', tickets);
+    return { ok: true, ticket: t };
+  }
+  async consumeTicket(t) {
+    if (!t || typeof t !== 'string' || t.length > 64) return false;
+    const tickets = (await this.ctx.storage.get('tickets')) || {};
+    const h = await sha256Hex(t);
+    const exp = tickets[h];
+    if (!exp) return false;
+    delete tickets[h]; await this.ctx.storage.put('tickets', tickets);
+    return exp > Date.now();
+  }
+  async adminKick(token, code, id) {
+    if (!(await this.checkToken(token))) return { ok: false, auth: false };
+    code = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+    id = Number.parseInt(id, 10);
+    const rooms = await this.rooms();
+    if (!rooms[code] || !Number.isInteger(id)) return { ...(await this.adminStatus(token)), notice: 'That room is already gone.' };
+    let hit = false;
+    try { hit = await this.env.ROOM.get(this.env.ROOM.idFromName(code)).kickPlayer(id, 'The owner removed you from the match.'); } catch (e) { /* room already gone */ }
+    return { ...(await this.adminStatus(token)), notice: hit ? '' : 'That player is already gone.' };
   }
   async adminKickAll(token) {
     if (!(await this.checkToken(token))) return { ok: false, auth: false };
@@ -373,6 +420,7 @@ export class Control extends DurableObject {
     set('dailyBudget', patch.dailyBudget, 1000, 95000);
     set('idleRoomSeconds', patch.idleRoomSeconds, 30, 3600);
     set('playerIdleSeconds', patch.playerIdleSeconds, 20, 600);
+    if (patch.hostOnly !== undefined) c.hostOnly = !!patch.hostOnly;
     await this.saveCfg(c);
     return this.adminStatus(token);
   }
@@ -415,8 +463,14 @@ export class Room extends DurableObject {
       t: 'lobby', code: meta.code, teamSize: meta.teamSize, phase: meta.phase || 'lobby',
       leader: ps.length ? ps[0].a.id : null,
       players: ps.map((p) => ({ id: p.a.id, name: p.a.name })),
+      away: this.awayList(meta),
     };
   }
+  absentEntries(meta) {                                       // players who dropped during the match and may still come back
+    const now = Date.now();
+    return Object.values((meta && meta.absent) || {}).filter((x) => x.until > now);
+  }
+  awayList(meta) { return this.absentEntries(meta).map((x) => ({ id: x.id, name: x.name })); }
   broadcast(obj) { this.sendAll(JSON.stringify(obj), null); }
   sendAll(str, except) {
     for (const ws of this.ctx.getWebSockets()) {
@@ -427,8 +481,12 @@ export class Room extends DurableObject {
 
   async report() {
     const meta = await this.loadMeta(); if (!meta) return;
-    const n = this.livePlayers().length; const u = this.units; this.units = 0;
-    try { await this.control().roomUpdate(meta.code, n, u); } catch (e) { /* try again next time */ }
+    const n = this.livePlayers().length + this.absentEntries(meta).length; const u = this.units; this.units = 0;
+    const list = [
+      ...this.livePlayers().map((p) => ({ id: p.a.id, name: p.a.name, away: false })),
+      ...this.absentEntries(meta).map((x) => ({ id: x.id, name: x.name, away: true })),
+    ];
+    try { await this.control().roomUpdate(meta.code, n, u, list); } catch (e) { /* try again next time */ }
   }
 
   // The Worker forwards the WebSocket upgrade here.
@@ -451,16 +509,52 @@ export class Room extends DurableObject {
       return new Response(null, { status: 101, webSocket: client });
     };
     if (!meta) return refuse(CLOSE.NOROOM, 'No room with that code.'); // should not happen (Worker checked with Control first)
+
+    // ----- a player coming back after their connection dropped -----
+    if (url.searchParams.get('rejoin') !== null) {
+      const id = Number.parseInt(url.searchParams.get('rejoin'), 10);
+      const tok = url.searchParams.get('tok') || '';
+      const phase = meta.phase || 'lobby';
+      const ab = meta.absent && meta.absent[id];
+      const absentOk = !!(ab && ab.tok === tok && ab.until > Date.now());
+      // The server may not have noticed yet that the old connection died: then the old socket is still here with the same key.
+      const old = this.players().find((p) => p.a.id === id && p.a.tok === tok && p.ws !== server);
+      if (phase === 'lobby' || tok.length < 8 || (!old && !absentOk)) return refuse(CLOSE.NOROOM, 'Could not get back into the match.');
+      const oldLive = !!(old && old.ws.readyState === 1);
+      const att = {
+        id, name: oldLive ? old.a.name : (ab ? ab.name : name),
+        seq: oldLive ? old.a.seq : meta.nextSeq,                    // came back from "away": last in line (so leadership does not flip back); a silent old socket keeps its place
+        lastSeen: Date.now(), ready: phase === 'playing' ? true : false, tok,
+      };
+      if (!oldLive) meta.nextSeq += 1;
+      if (meta.absent) delete meta.absent[id];
+      meta.lastActivity = Date.now();
+      await this.saveMeta();
+      server.serializeAttachment(att);
+      if (old) { try { old.ws.close(1000, 'replaced'); } catch (e) { /* already closed */ } }
+      this.units += 1;
+      server.send(JSON.stringify({ t: 'welcome', you: id, tok, rejoined: true, phase }));
+      this.broadcast(this.snapshot(meta));                           // first: who is leader now (a returning leader must learn it is no longer the leader)
+      if (phase === 'playing') {
+        server.send('{"t":"go"}');
+        const ev = meta.ev || {};                                    // what the team already did in the plane, so the returning player is not left behind
+        if (ev.jump) server.send('{"t":"ev","k":"jump","x":' + (+ev.jump.x || 0) + ',"z":' + (+ev.jump.z || 0) + '}');
+        if (ev.chute) server.send('{"t":"ev","k":"chute","x":0,"z":0}');
+      }
+      await this.report();
+      if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now() + 30000);
+      return new Response(null, { status: 101, webSocket: client });
+    }
     if ((meta.phase || 'lobby') !== 'lobby') return refuse(CLOSE.FULL, 'That match has already started.');
     if (this.livePlayers().length >= meta.teamSize) return refuse(CLOSE.FULL, 'That room is full.');
 
-    const att = { id: meta.nextId, seq: meta.nextSeq, name, lastSeen: Date.now(), ready: false };
+    const att = { id: meta.nextId, seq: meta.nextSeq, name, lastSeen: Date.now(), ready: false, tok: newToken() };
     meta.nextId += 1; meta.nextSeq += 1; meta.lastActivity = Date.now();
     await this.saveMeta();
     server.serializeAttachment(att);
     this.units += 1;
 
-    server.send(JSON.stringify({ t: 'welcome', you: att.id }));
+    server.send(JSON.stringify({ t: 'welcome', you: att.id, tok: att.tok }));
     this.broadcast(this.snapshot(meta));
     await this.report();
     if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now() + 30000);
@@ -472,17 +566,30 @@ export class Room extends DurableObject {
     // Flood guard: more than 60 messages in one second = disconnect.
     const now = Date.now(); let r = this.rate.get(ws);
     if (!r || now - r.t > 1000) { r = { t: now, n: 0 }; this.rate.set(ws, r); }
-    if (++r.n > 60) { try { ws.send(JSON.stringify({ t: 'closed', reason: 'Disconnected: too many messages.' })); ws.close(CLOSE.RATE, 'Too many messages'); } catch (e) {} return; }
+    if (++r.n > 80) { try { ws.send(JSON.stringify({ t: 'closed', reason: 'Disconnected: too many messages.' })); ws.close(CLOSE.RATE, 'Too many messages'); } catch (e) {} return; }
     if (typeof message !== 'string' || message.length > 12000) return;
     let m; try { m = JSON.parse(message); } catch (e) { return; }
     if (!m || typeof m.t !== 'string') return;
     if (m.t !== 'b' && message.length > 2000) return;       // only the leader's bot snapshots may be big
     const a = ws.deserializeAttachment(); if (!a) return;
     if (now - a.lastSeen > 1000) { a.lastSeen = now; ws.serializeAttachment(a); }   // at most once a second
-    if (m.t === 'hb') { ws.send('{"t":"hbr"}'); return; }
+    // Heartbeat / ping: answered at once. If the game sent a counter ("n") it is sent straight back so the game can match each answer to its own
+    // question and measure the true round trip. Only a plain whole number is echoed (nothing else a client sends is ever copied back).
+    if (m.t === 'hb') { ws.send(Number.isInteger(m.n) && m.n >= 0 && m.n < 1e9 ? '{"t":"hbr","n":' + m.n + '}' : '{"t":"hbr"}'); return; }
 
     const meta = await this.loadMeta(); if (!meta) return;
     const phase = meta.phase || 'lobby';
+
+    // ----- text chat: works in the lobby and during the match. The server cleans the text and stamps the sender's name itself, so it cannot be faked. -----
+    if (m.t === 'chat') {
+      if (typeof m.m !== 'string') return;
+      const text = m.m.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+      if (!text) return;
+      if (now - (a.lc || 0) < 700) return;                           // at most about one message a second per player
+      a.lc = now; ws.serializeAttachment(a);
+      this.sendAll(JSON.stringify({ t: 'chat', f: a.id, n: a.name, m: text }), ws);
+      return;
+    }
 
     // ----- position updates: forwarded to everyone else, stamped with who sent it -----
     if (m.t === 'p') {
@@ -532,7 +639,7 @@ export class Room extends DurableObject {
       if (!isLeader) return err('Only the leader can start the match.');
       if (phase !== 'lobby') return err('The match has already started.');
       const seed = crypto.getRandomValues(new Uint32Array(1))[0];
-      meta.phase = 'starting'; meta.seed = seed; meta.startDeadline = now + 25000;
+      meta.phase = 'starting'; meta.seed = seed; meta.startDeadline = now + 25000; meta.ev = undefined; meta.absent = {};
       meta.matchId = (meta.matchId || 0) + 1;
       for (const p of ps) { const at = p.a; at.ready = false; p.ws.serializeAttachment(at); }
       await this.saveMeta();
@@ -551,13 +658,16 @@ export class Room extends DurableObject {
       if (phase !== 'playing' || !isLeader) return;
       if (m.k !== 'jump' && m.k !== 'chute') return;
       const x = Number.isFinite(m.x) ? m.x : 0, z = Number.isFinite(m.z) ? m.z : 0;
+      meta.ev = meta.ev || {};
+      if (m.k === 'jump') meta.ev.jump = { x, z }; else meta.ev.chute = true;
+      await this.saveMeta();
       this.sendAll('{"t":"ev","k":"' + m.k + '","x":' + x + ',"z":' + z + '}', ws);
       return;
     }
     if (m.t === 'toLobby') {
       if (!isLeader) return err('Only the leader can send everyone back to the lobby.');
       if (phase === 'lobby') return;
-      meta.phase = 'lobby'; meta.seed = undefined; await this.saveMeta();
+      meta.phase = 'lobby'; meta.seed = undefined; meta.ev = undefined; meta.absent = {}; await this.saveMeta();
       for (const p of ps) { const at = p.a; at.ready = false; p.ws.serializeAttachment(at); }
       this.broadcast({ t: 'toLobby' });
       this.broadcast(this.snapshot(meta, ps)); return;
@@ -574,16 +684,31 @@ export class Room extends DurableObject {
     this.broadcast({ t: 'go' });
   }
 
+  // A player who drops in the middle of a match keeps their place for a while (see REJOIN_GRACE_MS).
+  async noteDrop(ws, code) {
+    const meta = await this.loadMeta(); if (!meta) return;
+    if ((meta.phase || 'lobby') === 'lobby' || NO_REJOIN_CODES.includes(code)) return;
+    let a = null; try { a = ws.deserializeAttachment(); } catch (e) { /* none */ }
+    if (!a || !a.tok) return;
+    if (this.players().some((p) => p.ws !== ws && p.ws.readyState === 1 && p.a.id === a.id)) return;   // they are already back on a new socket
+    meta.absent = meta.absent || {};
+    meta.absent[a.id] = { id: a.id, name: a.name, tok: a.tok, until: Date.now() + REJOIN_GRACE_MS };
+    await this.saveMeta();
+  }
   async webSocketClose(ws, code, reason) {
+    await this.noteDrop(ws, code);
     try { ws.close(code === 1005 || code === 1006 ? 1000 : code, 'bye'); } catch (e) { /* already closed */ }
     await this.afterLeave();
   }
-  async webSocketError(ws) { await this.afterLeave(); }
+  async webSocketError(ws) { await this.noteDrop(ws, 1006); await this.afterLeave(); }
 
   async afterLeave() {
     const meta = await this.loadMeta(); if (!meta) return;
     const ps = this.livePlayers();
-    if (ps.length === 0) { await this.destroy(); return; }
+    if (ps.length === 0) {
+      if (this.absentEntries(meta).length > 0 && (meta.phase || 'lobby') !== 'lobby') { await this.report(); return; }   // somebody may still come back
+      await this.destroy(); return;
+    }
     this.broadcast(this.snapshot(meta, ps));
     await this.maybeGo(meta);      // the one we were waiting for may have been the one who left
     await this.report();
@@ -598,6 +723,19 @@ export class Room extends DurableObject {
   }
 
   // Owner switch / budget cap: send everyone home and wipe the room.
+  // The owner removes one player (live or "away") from this room. The rest of the team carries on; the removed player cannot rejoin this match.
+  async kickPlayer(id, reason) {
+    const meta = await this.loadMeta(); if (!meta) return false;
+    let hit = false;
+    for (const p of this.players()) {
+      if (p.a.id !== id) continue;
+      hit = true;
+      try { p.ws.send(JSON.stringify({ t: 'closed', reason })); p.ws.close(CLOSE.KICK, 'Removed by the owner'); } catch (e) { /* already closed */ }
+    }
+    if (meta.absent && meta.absent[id]) { delete meta.absent[id]; hit = true; await this.saveMeta(); }
+    if (hit) await this.afterLeave();
+    return hit;
+  }
   async shutdown(reason, code) {
     this.broadcast({ t: 'closed', reason });
     for (const ws of this.ctx.getWebSockets()) { try { ws.close(code || CLOSE.OFF, String(reason).slice(0, 100)); } catch (e) {} }
@@ -616,10 +754,16 @@ export class Room extends DurableObject {
     let dropped = false;
     for (const p of this.players()) {
       if (now - p.a.lastSeen > c.playerIdleSeconds * 1000) {
-        try { p.ws.send(JSON.stringify({ t: 'closed', reason: 'You were disconnected because nothing was heard from you.' })); p.ws.close(CLOSE.IDLE, 'Timed out'); } catch (e) {}
+        try {
+          if ((meta.phase || 'lobby') === 'lobby') p.ws.send(JSON.stringify({ t: 'closed', reason: 'You were disconnected because nothing was heard from you.' }));   // in a match the game just reconnects
+          p.ws.close(CLOSE.IDLE, 'Timed out');
+        } catch (e) {}
         dropped = true;
       }
     }
+    let expired = false;
+    for (const id of Object.keys(meta.absent || {})) if (meta.absent[id].until <= now) { delete meta.absent[id]; expired = true; }
+    if (expired) await this.saveMeta();
     const tooOld = now - meta.createdAt > c.maxRoomSeconds * 1000;
     const lastReal = Math.max(meta.lastActivity, this.lastPoseAt || 0);
     const idle = now - lastReal > c.idleRoomSeconds * 1000;
@@ -628,8 +772,8 @@ export class Room extends DurableObject {
       for (const ws of this.ctx.getWebSockets()) { try { ws.close(CLOSE.IDLE, 'Room closed'); } catch (e) {} }
       await this.destroy(); return;
     }
-    if (dropped) await this.afterLeave(); else await this.report();
-    if (this.ctx.getWebSockets().length > 0) await this.ctx.storage.setAlarm(Date.now() + ((meta.phase === 'starting') ? 25000 : 30000));
+    if (dropped || expired) await this.afterLeave(); else await this.report();
+    if (this.meta && (this.ctx.getWebSockets().length > 0 || this.absentEntries(this.meta).length > 0)) await this.ctx.storage.setAlarm(Date.now() + ((meta.phase === 'starting') ? 25000 : 30000));
   }
 }
 
@@ -670,13 +814,14 @@ export default {
       const code = (url.searchParams.get('room') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
       const size = url.searchParams.get('size') === '2' ? 2 : 3;
       if (!create && code.length < 4) return rejectSocket(CLOSE.NOROOM, 'Enter the room code.');
-      const auth = await control().authorize(create, code, size);
+      const auth = await control().authorize(create, code, size, url.searchParams.get('host') || '', url.searchParams.get('rejoin') !== null);
       if (!auth.ok) { statusCache.at = 0; return rejectSocket(auth.close, auth.error); }
       const stub = env.ROOM.get(env.ROOM.idFromName(auth.code));
       const u = new URL(request.url);
       u.search = '';
       u.searchParams.set('code', auth.code);
       u.searchParams.set('name', url.searchParams.get('name') || '');
+      if (url.searchParams.get('rejoin') !== null) { u.searchParams.set('rejoin', url.searchParams.get('rejoin')); u.searchParams.set('tok', url.searchParams.get('tok') || ''); }
       if (auth.create) { u.searchParams.set('create', '1'); u.searchParams.set('size', String(auth.size)); }
       return stub.fetch(new Request(u.toString(), request));
     }
@@ -693,6 +838,11 @@ export default {
       let body = {}; try { body = await request.json(); } catch (e) {}
       statusCache.at = 0;
       const r = await control().adminSetEnabled(bearer(request), !!body.enabled); return json(r, r.auth === false ? 401 : 200);
+    }
+    if (p === '/mp/admin/ticket' && request.method === 'POST') { const r = await control().adminTicket(bearer(request)); return json(r, r.auth === false ? 401 : 200); }
+    if (p === '/mp/admin/kick' && request.method === 'POST') {
+      let body = {}; try { body = await request.json(); } catch (e) {}
+      const r = await control().adminKick(bearer(request), body.code, body.id); return json(r, r.auth === false ? 401 : 200);
     }
     if (p === '/mp/admin/kickall' && request.method === 'POST') { const r = await control().adminKickAll(bearer(request)); return json(r, r.auth === false ? 401 : 200); }
     if (p === '/mp/admin/limits' && request.method === 'POST') {
