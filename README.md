@@ -140,19 +140,19 @@ Upgraded inventory slots
 Added shield
 
 **Update0.54** - *Commited by BlazingiceYT on 17 Aug 2026*
-Added laser and smg
+Added laser and SMG
 
 **Update0.55** - *Commited by BlazingiceYT on 18 Aug 2026*
 Added new map for zombie mode
 
 **Optimization.56** - *Commited by BlazingiceYT on 18 Aug 2026*
-Used instnaced mesh more for higher fps
+Used instanced mesh more for higher fps
 
 **Optimization.57 - *Commited by BlazingiceYT on 18 Aug 2026*
-Fixed game thinking that ur on mac if ur on ipad, now deletes everything between games so ur phone dont go boom
+Fixed game thinking that ur on mac if ur on ipad, now deletes everything between games so ur phone doesn't go boom
 
 **Update0.58** - *Commited by BlazingiceYT on 18 Aug 2026*
-ai has become smarter
+Bot ai has become smarter
 
 **Update0.59** - *Commited by BlazingiceYT on 19 Aug 2026*
 Balance changes
