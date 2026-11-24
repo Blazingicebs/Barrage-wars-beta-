@@ -181,9 +181,13 @@ Added map.
 Update 0.66 - *COmmited by Blazingice on 16 oct 2026*
  Fixed bugs and fps issue
 
-Update 0.67 - *Commited by Blazingiceon 16 Oct 2026*
+Update 0.67 - *Commited by Blazingice on 16 Oct 2026*
 removed auto shoot 
 
 
-Update 0.68 - *Commited by Blazingiceon 5 Nov 2026*
+Update 0.68 - *Commited by Blazingice on 5 Nov 2026*
 Fully implemented multiplayer and added ping counter
+
+
+Update 0.69 - *Commited by Blazingice on 24 Nov 2026*
+Added soldier.glb, added aura power that boosts dmg and speed by 10%.
