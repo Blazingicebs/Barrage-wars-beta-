@@ -36,3 +36,5 @@ https://sketchfab.com/3d-models/laser-gun-40d21fa900cc42ee9393e4459e1d4e60
 
 "FPS map" by hanitaieberrahmani
 https://sketchfab.com/3d-models/fps-map-0088cd0d30184cbc87edf9b7fce88f6c
+
+A 3d model has been uploaded named 'Soldier.glb' It was created and animated in meshy ai.
