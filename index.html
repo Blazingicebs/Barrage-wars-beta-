@@ -244,7 +244,7 @@
 
   /* Touch controls need to render above the scope's black mask (z-index 8), otherwise they get
      visually hidden (though still clickable) whenever the player is scoped in. */
-  #moveTouchZone, #joystickZone, #jumpBtn, #crouchBtn, #fireBtn, #scopeBtn, #reloadBtn,
+  #moveTouchZone, #joystickZone, #jumpBtn, #crouchBtn, #fireBtn, #scopeBtn, #reloadBtn, #auraBtn,
   #weaponSwitchBtn, #dropBtn, #grenadeBtn, #smokeGrenadeBtn, #molotovBtn,
   #buildModeBtn, #buildBtn, #buildPieceBtn, #buildTierBtn, #equipBar, #topRightBtns, #skipWaveBtn {
     z-index: 9;
@@ -312,6 +312,33 @@
     pointer-events: auto; text-align: center; line-height: 1.05;
   }
   #reloadBtn:active { background: rgba(180,140,60,0.75); }
+
+  /* ---------- Red Aura skill button ---------- */
+  #auraBtn {
+    position: absolute; right: calc(200px * var(--ui-scale) + var(--safe-r)); bottom: calc(100px * var(--ui-scale) + var(--safe-b));
+    width: calc(66px * var(--ui-scale)); height: calc(66px * var(--ui-scale)); border-radius: 50%; padding: 0;
+    display: none; align-items: center; justify-content: center; pointer-events: auto; text-align: center;
+    --p: 1; --ring: #ff3b30;   /* --p = how much of the ring is filled: recharge progress, or power left while the aura is on */
+    background:
+      radial-gradient(circle at center, rgba(42,6,6,0.94) 0, rgba(42,6,6,0.94) 57%, transparent 58%),
+      conic-gradient(var(--ring) calc(var(--p) * 360deg), rgba(255,255,255,0.16) 0);
+    border: 3px solid rgba(255,90,70,0.9); box-shadow: 0 0 14px rgba(255,40,30,0.55);
+    color: #fff; font-weight: 800; font-size: calc(11px * var(--ui-scale)); line-height: 1.05; letter-spacing: 0.4px;
+    -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none;
+  }
+  #auraBtn .t { pointer-events: none; }
+  #auraBtn.cooling { --ring: #9a9a9a; border-color: rgba(200,200,200,0.5); box-shadow: none; font-size: calc(18px * var(--ui-scale)); }
+  #auraBtn.locked { opacity: 0.45; box-shadow: none; }
+  #auraBtn.active { --ring: #ffd23a; border-color: #ffb04a; box-shadow: 0 0 22px rgba(255,60,30,0.95); font-size: calc(20px * var(--ui-scale)); }
+  /* the pulse is a separate ring animated with transform + opacity only, which the GPU does without repainting the button */
+  #auraBtn.active::after { content: ''; position: absolute; inset: -6px; border-radius: 50%; border: 2px solid rgba(255,120,60,0.9); pointer-events: none; animation: auraBtnPulse 0.8s ease-out infinite; }
+  @keyframes auraBtnPulse { from { transform: scale(0.92); opacity: 0.9; } to { transform: scale(1.3); opacity: 0; } }
+  #auraVignette {
+    position: absolute; inset: 0; pointer-events: none; opacity: 0;
+    background: radial-gradient(ellipse at center, rgba(255,30,20,0) 55%, rgba(255,30,20,0.30) 100%);
+    transition: opacity 0.25s ease-out;
+  }
+  #auraVignette.show { opacity: 1; }
 
   #buildBtn {
     position: absolute; right: calc(130px * var(--ui-scale) + var(--safe-r)); bottom: calc(220px * var(--ui-scale) + var(--safe-b)); width: calc(56px * var(--ui-scale)); height: calc(56px * var(--ui-scale));
@@ -727,6 +754,7 @@
     </div>
 
     <div id="speedVignette"></div>
+    <div id="auraVignette"></div>
     <div id="speedLines"></div>
     <div id="zoneVignette"></div>
 
@@ -772,6 +800,7 @@
     <button id="buildTierBtn" title="Cycle material (Z)" style="display:none;">WOOD</button>
     <button id="scopeBtn">SCOPE</button>
     <button id="reloadBtn">RELOAD</button>
+    <button id="auraBtn" class="locked"><span class="t">AURA</span></button>
     <button id="fireBtn"><span id="fireBtnVisual">FIRE</span></button>
 
     <div id="topRightBtns">
@@ -978,7 +1007,7 @@
          file and not a cached older copy, given brightness changes weren't
          showing up across several rounds of adjustment. Safe to delete
          once that's confirmed either way; doesn't affect gameplay. -->
-    <div id="dbgBuildTag" style="position:fixed; bottom:4px; left:4px; z-index:99999; font:11px monospace; color:#0f0; background:rgba(0,0,0,0.6); padding:2px 6px; border-radius:4px; pointer-events:none;">build-check: online-match-v13</div>
+    <div id="dbgBuildTag" style="position:fixed; bottom:4px; left:4px; z-index:99999; font:11px monospace; color:#0f0; background:rgba(0,0,0,0.6); padding:2px 6px; border-radius:4px; pointer-events:none;">build-check: online-match-v14</div>
     <!-- TEMPORARY — character auto-fit diagnostic, shown on screen because
          iPad Safari has no console access without a Mac to pair with.
          Take a screenshot of this once it appears (right after spawning)
@@ -1943,6 +1972,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     updateCarProximity();
   }
   function tryEnterOrExitCar() {
+    if (auraLocked()) return;                                     // frozen during the red aura wind-up: no hopping into a car and driving off
     if (player.inCar) { exitCar(); return; }
     if (nearbyCar) enterCar(nearbyCar);
   }
@@ -4020,7 +4050,6 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     player.chuteOpen = false;
     planeGroup.visible = false;
     document.getElementById('dropOverlay').style.display = 'none';
-    triggerCharOneShot(player.charAnim, 'arise', { clampLast: false });
   }
   function updateDrop(dt) {
     if (!drop.active) return;
@@ -4063,12 +4092,11 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // nothing here can crash or block the game.
   const CHARACTER_MODEL_URL = 'soldier.glb'; // rename your downloaded .glb to this, or edit this string to match your exact filename
   const CHARACTER_TARGET_HEIGHT = 1.85; // meters
-  // This export was authored Z-up (Blender's native convention) instead of
-  // glTF's usual Y-up, confirmed by reading the file's own skeleton data
-  // directly: in the raw bind pose the Head and foot bones sit almost
-  // exactly above/below each other along Z, not Y. Rotating +90° around X
-  // maps that old "up" axis onto Y correctly. If a future re-export or a
-  // different character comes in already Y-up, set this to 0.
+  // The ORIGINAL export of this character was authored Z-up (Head and foot bones
+  // stacked along Z instead of Y), which needs the two rotations below. The
+  // current soldier.glb is the normal glTF Y-up and only needs a turn around the
+  // vertical axis. attachCharacterModel() reads the skeleton and picks the right
+  // one by itself, so these two constants only matter for a Z-up file.
   const CHARACTER_MODEL_ROTATION_X = Math.PI / 2;
   // The model faces the camera by default in third person (should face
   // away, since the camera sits behind the character looking at their
@@ -4076,62 +4104,70 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // that, applied after the X correction above.
   const CHARACTER_MODEL_ROTATION_Y = Math.PI;
 
-  // This character's Meshy export has 10 animation clips. Five kept the
-  // names you gave them in the Meshy UI (Arise, Attack, Dead, Running,
-  // Walking) and get matched below by keyword. The other five —
-  // Crouching, jump2.0, Reload, Shoot, and "Walking while Crouching" —
-  // came out of the GLB with generic auto-generated IDs instead of
-  // names, so there's no label left to match them by keyword. They're
-  // identified below by the exact ID Meshy assigned each one in THIS
-  // export, worked out by inspecting how each clip actually moves the
-  // skeleton (e.g. the "jump" clip is the one where the hips launch far
-  // upward, "reload" is the one where only the arms move while the legs
-  // stay planted, "shoot" is a long, mostly-stationary firing-stance
-  // loop, and "walking while crouching" is the one that actually travels
-  // across the floor with the shorter, more compact stride a crouched
-  // gait would have).
+  // This character's Meshy export has 13 animation clips. Seven kept the names
+  // you gave them in Meshy (Alert, Arise, Attack, Dead, Running, Skill_01,
+  // Walking) and are matched below by keyword. The other six - Crouch,
+  // Freefalling, Jump, "Kneel while wounded", "reviving someone else" and
+  // shoot - came out of the GLB with generic auto-generated IDs instead of
+  // names, so there is no label left to match them by. They are identified
+  // below by the exact ID Meshy assigned each one in THIS export, worked out by
+  // measuring how each clip actually moves the skeleton:
+  //   jump      - the only short clip where both feet leave the ground
+  //   crouch    - short, nearly static, hips dropped and torso leaning forward
+  //   kneel     - hips drop to ~0.5 m and both knees end up on the floor
+  //   freefall  - the whole body lies horizontal (torso at ~90 degrees)
+  //   shoot     - standing straight with both hands raised to head height
+  //   revive    - standing bent forward ~60 degrees with both hands low and
+  //               close together (working on someone on the ground)
   //
-  // If you ever add more animations on Meshy and re-download a fresh
-  // export, these IDs will very likely regenerate and stop matching —
-  // that's fine, nothing breaks, those five just quietly fall back to
-  // whatever the keyword matcher can find (probably nothing, for
-  // ID-named clips) until you tell me the new ones. After the model
-  // loads, open your browser's dev console (in Safari on iPad: Settings
-  // > Safari > Advanced > Web Inspector, then plug into a Mac — or just
-  // test the page in a desktop browser's console) to see every clip name
-  // Meshy actually shipped and which role each one got matched to, so a
-  // mismatch is easy to spot and fix.
-  const CHAR_ANIM_ID_ROLES = {
+  // If you ever re-export from Meshy, these IDs will very likely change and
+  // stop matching - nothing breaks, those six just quietly stop playing until
+  // the new IDs are filled in here. After the model loads, the browser console
+  // lists every clip name Meshy shipped and which role each one got.
+  const CHAR_ANIM_ID_ROLES_RAW = {
+    '_01a1afdb_4142_7234_a4b5_cb980d4638f7': 'jump',
+    '_01a1afdf_9e53_7077_bfd5_250a2e004519': 'crouch',
+    '_01a1afe8_4c5f_726d_aaf5_64ad2f656c28': 'kneel',
+    '_01a1afec_ff7c_7479_a282_65a0cccfcae9': 'freefall',
+    '_01a1afee_0010_7154_b554_f4466503f33f': 'shoot',
+    '_01a1aff0_d463_7607_b9e3_41235ec0f4e0': 'revive',
+    // IDs from the previous export (so an older soldier.glb still works)
     '019fff90-b098-7c72-83e9-429158543185': 'crouch',
     '019fff95-12f8-7918-901a-a0f8a23b826e': 'jump',
     '019fff95-db20-7938-ad68-0f13733a5d7a': 'shoot',
     '019fff99-68d7-79de-98bc-86d57072a17c': 'crouchWalk',
     '019fff9b-4457-7e90-8b0c-7a1dd1ff6c0d': 'reload',
   };
-  // Keyword fallback — covers the 5 named clips above, and is what kicks
-  // in for the ID-named ones if you ever re-export and the IDs above go
-  // stale. Order matters: more specific aliases are checked first so e.g.
-  // a clip actually named "Walking while Crouching" doesn't get grabbed
-  // by the plain "walk" bucket meant for a clip named just "Walking".
+  // Keyword fallback - covers the named clips, and is what kicks in for the
+  // ID-named ones if you ever re-export and the IDs above go stale. Order
+  // matters: more specific aliases are checked first so e.g. a clip actually
+  // named "Walking while Crouching" doesn't get grabbed by the plain "walk"
+  // bucket meant for a clip named just "Walking".
   const CHAR_ANIM_ALIASES = [
     ['crouchWalk', ['walkingwhile', 'crouchwalk', 'walkcrouch', 'crouchingwalk', 'duckwalk']],
-    ['walk',    ['walking', 'walk']],
-    ['run',     ['running', 'sprint', 'run']],
-    ['crouch',  ['crouching', 'crouch']],
-    ['jump',    ['jump']],
-    ['arise',   ['arise', 'getup', 'standup', 'wake']],
-    ['attack',  ['attack', 'melee', 'swing']],
-    ['dead',    ['dead', 'death', 'die']],
-    ['shoot',   ['shooting', 'shoot', 'fire']],
-    ['reload',  ['reloading', 'reload']],
-    ['idle',    ['idle', 'breathing', 'breath']],
+    ['walk',     ['walking', 'walk']],
+    ['run',      ['running', 'sprint', 'run']],
+    ['crouch',   ['crouching', 'crouch']],
+    ['jump',     ['jump']],
+    ['kneel',    ['kneel', 'wounded']],
+    ['freefall', ['freefall', 'skydive']],
+    ['revive',   ['reviv']],
+    ['skill',    ['skill', 'aura']],
+    ['arise',    ['arise', 'getup', 'standup', 'wake']],
+    ['attack',   ['attack', 'melee', 'swing']],
+    ['dead',     ['dead', 'death', 'die']],
+    ['shoot',    ['shooting', 'shoot', 'fire']],
+    ['reload',   ['reloading', 'reload']],
+    ['idle',     ['alert', 'idle', 'breathing', 'breath']],
   ];
   function normalizeClipName(n) { return (n || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+  const CHAR_ANIM_ID_ROLES = {};
+  for (const k in CHAR_ANIM_ID_ROLES_RAW) CHAR_ANIM_ID_ROLES[normalizeClipName(k)] = CHAR_ANIM_ID_ROLES_RAW[k];
   function buildCharClipMap(clips) {
     const used = new Set();
     const map = {};
     for (const clip of clips) {
-      const role = CHAR_ANIM_ID_ROLES[clip.name];
+      const role = CHAR_ANIM_ID_ROLES[normalizeClipName(clip.name)];
       if (role && !map[role]) { map[role] = clip; used.add(clip); }
     }
     for (const [key, aliases] of CHAR_ANIM_ALIASES) {
@@ -4146,18 +4182,17 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     return map;
   }
 
-  // Meshy's clips bake real forward/side travel onto the Hips bone (the
-  // "jump" clip's hips drift sideways over a full unit on their own,
-  // entirely separate from this game's own physics) — since every
-  // character's position here is 100% controlled by game code
-  // (player.pos / bot.pos), not by animation, any translation baked into
-  // a clip only fights that and causes sliding, moonwalking, or a visible
-  // "pop" back into place every time a clip restarts. This zeroes out the
-  // Hips bone's X/Z translation on every keyframe of every clip (once,
-  // right after loading) so the game's own movement code is always the
-  // only thing that moves a character through the world. Vertical (Y)
-  // motion is left completely untouched, so jumping, standing up, and
-  // collapsing still play out exactly as animated.
+  // Meshy's clips bake real forward/side travel onto the Hips bone - since every
+  // character's position here is 100% controlled by game code (player.pos /
+  // bot.pos), not by animation, any translation baked into a clip only fights
+  // that and causes sliding, moonwalking, or a visible "pop" back into place every
+  // time a clip restarts. This zeroes out the Hips bone's X/Z translation on
+  // every keyframe of every clip (once, right after loading) so the game's own
+  // movement code is always the only thing that moves a character through the
+  // world. Vertical (Y) motion is left completely untouched, so jumping,
+  // standing up, and collapsing still play out exactly as animated. (This
+  // export is Y-up, so X/Z are the horizontal axes; the legacy Z-up export that
+  // used to be here was handled the same way.)
   function stripHorizontalRootMotion(clip) {
     if (!clip) return clip;
     for (const track of clip.tracks) {
@@ -4171,6 +4206,43 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     return clip;
   }
 
+  // Turns the raw clips into the set of clips the animation controller plays.
+  // Done ONCE per model load and shared by every character (clips are only
+  // data; each character's own mixer does the playing).
+  //  - "Kneel while wounded" and "reviving someone else" are 10 s clips made of
+  //    a short move into the pose followed by a long, nearly still hold. They
+  //    are cut into an intro (played once) and a hold (looped back and forth,
+  //    which never pops because it just reverses direction), so a downed
+  //    player can kneel for 90 s without the clip ever snapping back to
+  //    standing.
+  //  - "Jump" is trimmed to the part where the character is actually in the
+  //    air (the crouch before take-off would otherwise play AFTER the player
+  //    has already left the ground).
+  //  - "Attack" is trimmed from the raised-overhead pose through the chop and
+  //    follow-through, because the damage lands the instant you swing, so the
+  //    long wind-up at the start of the clip would look late.
+  // Every cut is guarded by the clip's length, so a different export falls back
+  // to playing its clips whole instead of cutting at the wrong place.
+  function buildCharClipSet(animations) {
+    const map = buildCharClipMap(animations);
+    for (const key in map) stripHorizontalRootMotion(map[key]);
+    const FPS = 30;
+    const cut = (name, clip, fromS, toS) => THREE.AnimationUtils.subclip(clip, name, Math.round(fromS * FPS), Math.round(toS * FPS) + 1, FPS);
+    if (map.kneel && map.kneel.duration > 5) {
+      const full = map.kneel;
+      map.kneelLoop = cut('kneelLoop', full, 3.0, full.duration);
+      map.kneel = cut('kneelIntro', full, 0, 3.0);
+    }
+    if (map.revive && map.revive.duration > 6) {
+      const full = map.revive;
+      map.reviveLoop = cut('reviveLoop', full, 4.0, full.duration);
+      map.revive = cut('reviveIntro', full, 0, 4.0);
+    }
+    if (map.jump && map.jump.duration > 1.6) map.jump = cut('jumpAir', map.jump, 0.66, 1.5);
+    if (map.attack && map.attack.duration > 2.2) map.attack = cut('attackSwing', map.attack, 0.7, 1.8);
+    return map;
+  }
+
   let soldierGLTF = null;
   let soldierLoadFailed = false;
   let soldierLoadCallbacks = [];
@@ -4182,8 +4254,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     gltfLoader.load(
       CHARACTER_MODEL_URL,
       (gltf) => {
-        const clipMap = buildCharClipMap(gltf.animations);
-        for (const key in clipMap) stripHorizontalRootMotion(clipMap[key]);
+        const clipMap = buildCharClipSet(gltf.animations);   // roles -> clips (some cut into intro/hold or trimmed), shared by every character
+        gltf.userData.charClips = clipMap;
         const boneNames = [];
         gltf.scene.traverse(o => { if (o.isBone) boneNames.push(o.name); });
         console.log('[character] loaded ' + CHARACTER_MODEL_URL + ' — raw clip names:', gltf.animations.map(a => a.name));
@@ -4216,114 +4288,116 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (!SkeletonUtils || !SkeletonUtils.clone) { console.warn('[character] SkeletonUtils not loaded — keeping placeholder body.'); return; }
 
     const model = SkeletonUtils.clone(gltf.scene);
-    // Applied as two separate sequential rotations (not a combined Euler
-    // triple) so each one has an unambiguous, easy-to-reason-about effect:
-    // rotateX first corrects the Z-up export onto Y-up, then a second turn
-    // spins the now-upright model around its own vertical axis to face
-    // away from the camera in third person (it was facing the camera
-    // before).
     model.rotation.set(0, 0, 0);
-    // NOTE: after rotateX, the model's own local Y axis no longer points
-    // world-up (that rotation moved it) — its local Z axis does instead.
-    // So the second turn has to rotate around Z, not Y, or it spins
-    // around the wrong axis and flips the character upside-down instead
-    // of just turning it to face the other way (found this the hard way).
-    model.rotateX(CHARACTER_MODEL_ROTATION_X);
-    model.rotateZ(CHARACTER_MODEL_ROTATION_Y);
-
-    // Auto-fit: rescale to a consistent height and drop it so the feet
-    // sit at local y=0. We measure using the Head and toe bones' actual
-    // world positions rather than Box3 on the mesh geometry — a
-    // SkinnedMesh's bounding box is computed from its own vertex buffer
-    // and doesn't reliably reflect the real posed/rotated size right
-    // after cloning, which is what caused the character to balloon to a
-    // huge size the first time around. Bones are plain Object3D nodes, so
-    // their world positions are always correct. Everything is measured
-    // once at scale 1 and the final foot offset is computed by scaling
-    // that single measurement (rather than re-measuring a second time
-    // after rescaling), since re-measuring produced a wrong offset that
-    // sank the model into the ground.
     model.scale.setScalar(1);
     model.position.set(0, 0, 0);
     model.updateMatrixWorld(true);
 
-    function findBone(name) { let found = null; model.traverse(o => { if (!found && o.isBone && o.name === name) found = o; }); return found; }
+    // Bone lookup that ignores Mixamo-style prefixes: this export's bones are
+    // called "mixamorig:Head", "mixamorig:LeftToeBase"... and three.js strips the
+    // colon when it loads them, so they arrive as "mixamorigHead" etc. Older
+    // exports used plain "Head". Both work.
+    const boneKey = (n) => (n || '').replace(/^mixamorig:?/i, '');
+    function findBone(name) { let found = null; model.traverse(o => { if (!found && o.isBone && boneKey(o.name) === name) found = o; }); return found; }
+    const wpos = (b) => b.getWorldPosition(new THREE.Vector3());
     const headBone = findBone('Head');
-    const toeBone = findBone('LeftToeBase') || findBone('RightToeBase') || findBone('LeftFoot') || findBone('RightFoot');
+    const headTopBone = findBone('HeadTop_End');
+    const footL = findBone('LeftFoot'), footR = findBone('RightFoot');
+    const toeL = findBone('LeftToeBase'), toeR = findBone('RightToeBase');
+    const toeBone = toeL || toeR || footL || footR;
 
+    // 1) Which way is "up" in this file, and which way does the character face?
+    // Read straight from the skeleton's own bind pose instead of assumed:
+    //  - the old export was Z-up (Head and foot bones stacked along Z) and needs
+    //    the two legacy rotations below;
+    //  - this export is the normal glTF Y-up and faces +Z, so it only needs a
+    //    180 degree turn around the vertical axis to face -Z, the direction
+    //    "forward" points in this game (the camera sits behind the character).
+    let zUp = false, facesPlusZ = true;
+    if (headBone && toeBone) {
+      const d = wpos(headBone).sub(wpos(toeBone));
+      zUp = Math.abs(d.z) > Math.abs(d.y);
+      const fwdZ = (footL && toeL) ? wpos(toeL).z - wpos(footL).z : ((footR && toeR) ? wpos(toeR).z - wpos(footR).z : 0);
+      facesPlusZ = fwdZ >= 0;
+    }
+    if (zUp) {
+      model.rotateX(CHARACTER_MODEL_ROTATION_X);   // legacy Z-up export: rotateX first, then spin around its own (now vertical) Z axis
+      model.rotateZ(CHARACTER_MODEL_ROTATION_Y);
+    } else {
+      model.rotation.y = facesPlusZ ? Math.PI : 0;
+    }
+    model.updateMatrixWorld(true);
+
+    // 2) Auto-fit: rescale to a consistent height and drop it so the feet sit at
+    // local y=0. Measured from the Head-top and toe bones' actual world
+    // positions rather than Box3 on the mesh geometry (a SkinnedMesh's bounding
+    // box is computed from its own vertex buffer and doesn't reliably reflect
+    // the real posed/rotated size right after cloning). Bones are plain Object3D
+    // nodes, so their world positions are always correct. Everything is measured
+    // once at scale 1 and the final foot offset is computed by scaling that
+    // single measurement.
     let rawHeight = 0, rawFootY = 0, usedBones = false;
     let diagText = '';
     if (headBone && toeBone) {
-      const headPos = new THREE.Vector3(), toePos = new THREE.Vector3();
-      headBone.getWorldPosition(headPos);
-      toeBone.getWorldPosition(toePos);
-      rawHeight = Math.abs(headPos.y - toePos.y) * 1.12; // the Head joint sits at the neck, not the top of the skull — pad a bit so the whole head is included
-      // The toe joint is the pivot the toes bend around, not the very
-      // bottom of the boot sole — measured directly against this rig's
-      // own mesh data, the sole sits about 2.5% of total body height
-      // below the toe joint. Left unaccounted for, this alone doesn't
-      // explain a large sink, but it's a real, verified gap worth
-      // closing exactly rather than guessing at import time.
-      rawFootY = toePos.y - rawHeight * 0.025;
+      let lowToeY = Infinity;
+      for (const b of [toeL, toeR]) if (b) lowToeY = Math.min(lowToeY, wpos(b).y);
+      if (headTopBone && isFinite(lowToeY)) {
+        // The toe joint sits about 3% of the body height above the sole of the boot (measured on this rig's own mesh).
+        const topY = wpos(headTopBone).y;
+        rawHeight = (topY - lowToeY) * 1.03;
+        rawFootY = lowToeY - (topY - lowToeY) * 0.03;
+      } else {
+        const headPos = wpos(headBone), toePos = wpos(toeBone);
+        rawHeight = Math.abs(headPos.y - toePos.y) * 1.12; // the Head joint sits at the neck, not the top of the skull - pad a bit so the whole head is included
+        rawFootY = toePos.y - rawHeight * 0.025;
+      }
       usedBones = true;
-      diagText = 'bones OK head_y=' + headPos.y.toFixed(3) + ' toe_y=' + toePos.y.toFixed(3) + ' rawH=' + rawHeight.toFixed(3) + ' rawFootY=' + rawFootY.toFixed(3);
-      console.log('[character][diag] bones found — head y=' + headPos.y.toFixed(4) + ' toe y=' + toePos.y.toFixed(4) + ' rawHeight=' + rawHeight.toFixed(4) + ' rawFootY=' + rawFootY.toFixed(4));
+      diagText = 'bones OK upAxis=' + (zUp ? 'Z' : 'Y') + ' rawH=' + rawHeight.toFixed(3) + ' rawFootY=' + rawFootY.toFixed(3);
+      console.log('[character][diag] bones found - upAxis=' + (zUp ? 'Z' : 'Y') + ' facesPlusZ=' + facesPlusZ + ' rawHeight=' + rawHeight.toFixed(4) + ' rawFootY=' + rawFootY.toFixed(4));
     } else {
       const box = new THREE.Box3().setFromObject(model);
       rawHeight = box.max.y - box.min.y;
       rawFootY = box.min.y;
-      // TEMPORARY DIAGNOSTIC — lists every bone name actually present in
-      // this model so a naming mismatch (e.g. 'mixamorig:Head' instead of
-      // 'Head') can be confirmed or ruled out directly, instead of guessed.
       const allBoneNames = [];
       model.traverse(o => { if (o.isBone) allBoneNames.push(o.name); });
       diagText = 'BONES NOT FOUND head=' + !!headBone + ' toe=' + !!toeBone + ' boxH=' + rawHeight.toFixed(3) + ' names=' + allBoneNames.join(',');
-      console.warn('[character][diag] head/toe bone NOT found by exact name — headBone=' + !!headBone + ' toeBone=' + !!toeBone + '. Falling back to Box3 (unreliable right after cloning, per comment above). All bone names in this model: ' + JSON.stringify(allBoneNames));
+      console.warn('[character][diag] head/toe bone NOT found - headBone=' + !!headBone + ' toeBone=' + !!toeBone + '. Falling back to Box3 (unreliable right after cloning). All bone names in this model: ' + JSON.stringify(allBoneNames));
     }
 
     let scaleFactor = (rawHeight > 0 && isFinite(rawHeight)) ? (CHARACTER_TARGET_HEIGHT / rawHeight) : 1;
     if (!isFinite(scaleFactor) || scaleFactor <= 0 || scaleFactor > 50 || scaleFactor < 0.001) {
-      console.warn('[character] Auto-fit produced an unreasonable scale (' + scaleFactor + ') — falling back to a fixed 1.3x, which matched this export when inspected directly.');
+      console.warn('[character] Auto-fit produced an unreasonable scale (' + scaleFactor + ') - falling back to a fixed 1.3x.');
       diagText += ' | REJECTED scale=' + scaleFactor + ' ->1.3';
       scaleFactor = 1.3;
       // rawFootY was measured assuming the auto-computed scaleFactor we're
-      // now discarding — keeping it here (as this used to, for the
-      // bones-succeeded case) applies a foot offset computed for one scale
-      // to a completely different one, which sinks or floats the model by
-      // whatever that mismatch works out to. Always reset it alongside the
-      // scale fallback, not just when bone lookup itself failed.
+      // now discarding - always reset it alongside the scale fallback.
       rawFootY = 0;
     }
     model.scale.setScalar(scaleFactor);
     model.position.y = -rawFootY * scaleFactor; // scaling is linear and uniform from the model's own origin, so the scaled foot height is just the unscaled one times the same factor
     model.updateMatrixWorld(true);
     diagText += ' | scale=' + scaleFactor.toFixed(3) + ' model.y=' + model.position.y.toFixed(3);
-    console.log('[character][diag] final: usedBones=' + usedBones + ' CHARACTER_TARGET_HEIGHT=' + CHARACTER_TARGET_HEIGHT + ' scaleFactor=' + scaleFactor.toFixed(4) + ' model.position.y=' + model.position.y.toFixed(4) + ' rootGroup.position=(' + rootGroup.position.x.toFixed(2) + ',' + rootGroup.position.y.toFixed(2) + ',' + rootGroup.position.z.toFixed(2) + ')');
+    console.log('[character][diag] final: usedBones=' + usedBones + ' CHARACTER_TARGET_HEIGHT=' + CHARACTER_TARGET_HEIGHT + ' scaleFactor=' + scaleFactor.toFixed(4) + ' model.position.y=' + model.position.y.toFixed(4));
 
-    // Real head height (rootGroup-local) — used below to rescale the
-    // invisible hit-test proxies to this character's actual measured size
-    // instead of the placeholder's fixed guess. Read via getWorldPosition
-    // on the actual bone, not a Box3 on the geometry: three.js's Box3
-    // helper reads a SkinnedMesh's raw, unskinned vertex buffer, and right
-    // after SkeletonUtils.clone() that buffer isn't reliably ready to
-    // measure from — that's what caused this same model to balloon to a
-    // huge size the first time this loader was built, and it's why this
-    // reads the live bone transform instead.
+    // Real head height (rootGroup-local) - used below to rescale the invisible
+    // hit-test proxies to this character's actual measured size instead of the
+    // placeholder's fixed guess. The proxies' head sphere is centred at
+    // 1.65 / 1.75 of this number, so with the Head-top bone available it is
+    // set 5 cm below the crown, which puts that sphere on the middle of the
+    // real head. Read via getWorldPosition on the actual bones (the model is not
+    // attached to anything yet, so this is already in the model's own space).
     let realHeadY = null;
-    if (headBone) {
-      const hp = new THREE.Vector3();
-      headBone.getWorldPosition(hp);
-      realHeadY = hp.y;
-    }
-    // TEMPORARY — same diagnostic, shown directly on screen instead of only
-    // the browser console, since iPad Safari has no easy console access
-    // without a Mac to pair with. Only for the player's own model (holder
-    // === player), not every bot, to avoid spamming this with 49 lines.
+    if (headTopBone) realHeadY = wpos(headTopBone).y - 0.05;
+    else if (headBone) realHeadY = wpos(headBone).y;
+    // TEMPORARY - same diagnostic, shown directly on screen instead of only the
+    // browser console, since iPad Safari has no easy console access without a
+    // Mac to pair with. Only for the player's own model (holder === player),
+    // not every bot, to avoid spamming this with 49 lines.
     if (holder === player) {
       const wp = new THREE.Vector3();
       tpWeaponRig.updateMatrixWorld(true);
       tpWeaponRig.getWorldPosition(wp);
-      diagText += ' | weaponWorldY=' + wp.y.toFixed(3) + ' (vs realHeadY=' + (realHeadY!=null?realHeadY.toFixed(3):'n/a') + ')';
+      diagText += ' | weaponWorldY=' + wp.y.toFixed(3) + ' (vs realHeadY=' + (realHeadY != null ? realHeadY.toFixed(3) : 'n/a') + ')';
       const el = document.getElementById('dbgCharDiag');
       if (el) { el.style.display = 'block'; el.textContent = 'char-diag: ' + diagText; }
     }
@@ -4372,18 +4446,39 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     }
 
     const mixer = new THREE.AnimationMixer(model);
-    const clipMap = buildCharClipMap(gltf.animations);
+    // A private copy of the shared clip set: the idle fallback below must not leak into the shared map.
+    const clipMap = Object.assign({}, gltf.userData.charClips || buildCharClipMap(gltf.animations));
     const idleIsFallback = !clipMap.idle;
     if (idleIsFallback) clipMap.idle = clipMap.walk || clipMap.run || null;
     const actions = {};
     for (const key in clipMap) { if (clipMap[key]) actions[key] = mixer.clipAction(clipMap[key]); }
 
-    const charAnim = { mixer, actions, model, mode: 'loop', loopState: null, oneshotKey: null, activeLoopAction: null, idleIsFallback };
+    const charAnim = {
+      mixer, actions, model, idleIsFallback,
+      mode: 'loop',            // 'loop' = following the state the game asks for, 'oneshot' = playing a single action (jump, swing, skill...)
+      loopState: null, oneshotKey: null, activeLoopAction: null,
+      playing: new Set(),      // every action currently contributing to the pose, so a change of state can fade ALL of them out
+      osT: 0, osCancelAfter: 0, osCancelOnMove: false,
+      shootT: 0,               // seconds left of the "firing" stance after the last shot
+      introAction: null, introNext: null, instant: true
+    };
     mixer.addEventListener('finished', (e) => {
-      if (charAnim.mode === 'oneshot' && charAnim.oneshotKey !== 'dead' && e.action === charAnim.actions[charAnim.oneshotKey]) {
-        charAnim.mode = 'loop';
-        charAnim.loopState = null;
-        charAnim.activeLoopAction = null;
+      const ca = charAnim;
+      if (ca.mode === 'oneshot' && ca.oneshotKey !== 'dead' && e.action === ca.actions[ca.oneshotKey]) {
+        // the action holds its last frame until the next state fades it out, so there is no pop back to the bind pose
+        ca.mode = 'loop'; ca.loopState = null; ca.activeLoopAction = null; ca.oneshotKey = null;
+      } else if (ca.mode === 'loop' && ca.introAction && e.action === ca.introAction && ca.introNext) {
+        // the move into the pose is done: hand over to the long hold
+        const hold = ca.introNext, intro = ca.introAction;
+        ca.introAction = null; ca.introNext = null;
+        hold.reset();
+        hold.setLoop(THREE.LoopPingPong, Infinity);
+        hold.clampWhenFinished = false;
+        hold.time = 0;
+        hold.fadeIn(0.4).play();
+        intro.fadeOut(0.4);
+        ca.playing.add(hold);
+        ca.activeLoopAction = hold;
       }
     });
     holder.charAnim = charAnim;
@@ -4399,49 +4494,126 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     }
   }
 
+  // ---------- Character animation controller ----------
+  // Every character (you, bots, teammates) has one of these. The game tells it
+  // what the character is DOING right now (idle / walk / run / crouch / kneel /
+  // freefall / revive) through tickCharAnim, and fires one-off actions (jump,
+  // swing, skill, arise, dead) through triggerCharOneShot. Rules:
+  //  - a short clip loops until the state changes;
+  //  - a long clip is cut off the moment the character does something else
+  //    (idle -> walk fades the idle out and the walk in);
+  //  - a one-off action plays through, but can be cut short by moving once it
+  //    has run for `cancelAfter` seconds (skill, arise, the landing of a jump);
+  //  - going down ('kneel') or leaving the plane ('freefall') always wins.
+  const CHAR_SHOOT_HOLD = 0.35;       // seconds the aiming stance stays up after a shot
+  const CHAR_DEAD_FROM_KNEEL = 1.45;  // the "Dead" clip passes through a kneeling pose here, so a downed player who dies collapses from the kneel instead of popping upright first
+  const CHAR_ARISE_START = 0.7;       // "Arise" at this point is pushing up out of a kneel (its first 0.7 s is lying flat on the ground)
+  // If a clip a state wants is missing from an export, use the closest one that exists.
+  const CHAR_STATE_FALLBACK = { crouchWalk: 'crouch', crouch: 'idle', kneel: 'idle', revive: 'idle', freefall: 'idle', shoot: 'idle', run: 'walk', walk: 'run' };
+
+  // Starts `key` and fades EVERYTHING else that was playing out, so no stray
+  // action can ever stay blended into the pose.
+  function charPlay(ca, key, o) {
+    const act = ca.actions[key];
+    if (!act) return null;
+    const fade = o.fade === undefined ? 0.2 : o.fade;
+    for (const a of ca.playing) {
+      if (a === act) continue;
+      if (fade > 0) a.fadeOut(fade); else a.stop();
+    }
+    ca.playing.clear();
+    act.reset();
+    act.setLoop(o.loop || THREE.LoopRepeat, o.loop === THREE.LoopOnce ? 1 : Infinity);
+    act.clampWhenFinished = !!o.clamp;
+    act.timeScale = o.timeScale || 1;
+    act.time = o.startAt || 0;
+    if (fade > 0) act.fadeIn(fade); else act.setEffectiveWeight(1);
+    act.play();
+    ca.playing.add(act);
+    return act;
+  }
+
+  function charEnterLoop(ca, state) {
+    ca.loopState = state;
+    let key = state;
+    for (let i = 0; i < 3 && key && !ca.actions[key]; i++) key = CHAR_STATE_FALLBACK[key];
+    if (!key || !ca.actions[key]) return;
+    const fade = ca.instant ? 0 : 0.2;
+    ca.instant = false;
+    ca.introAction = null; ca.introNext = null;
+    if (key === 'idle' && ca.idleIsFallback) {
+      const act = charPlay(ca, 'idle', { fade });
+      const dur = act.getClip().duration;
+      act.time = dur > 0 ? dur * CHAR_IDLE_POSE_FRACTION : 0;
+      act.paused = true; // frozen pose - closest thing to standing still without a real idle clip
+    } else if (ca.actions[key + 'Loop']) {
+      // a move into a pose (kneel, revive) followed by a long hold: play the move once, the 'finished' listener starts the hold
+      ca.introAction = charPlay(ca, key, { fade, loop: THREE.LoopOnce, clamp: true });
+      ca.introNext = ca.actions[key + 'Loop'];
+    } else {
+      charPlay(ca, key, { fade });
+    }
+    ca.activeLoopAction = ca.actions[key];
+  }
+
+  // Forget everything (respawn / new match) and show the next state instantly, with no fade from the old pose.
+  function charResetState(ca) {
+    if (!ca) return;
+    ca.mixer.stopAllAction();
+    ca.playing.clear();
+    ca.mode = 'loop'; ca.loopState = null; ca.activeLoopAction = null; ca.oneshotKey = null;
+    ca.introAction = null; ca.introNext = null; ca.shootT = 0; ca.instant = true;
+  }
+
   function tickCharAnim(ca, desiredLoopState, dt) {
     if (!ca) return;
-    if (ca.mode !== 'oneshot' && desiredLoopState && desiredLoopState !== ca.loopState) {
-      const next = ca.actions[desiredLoopState];
-      if (next && next !== ca.activeLoopAction) {
-        if (ca.activeLoopAction) ca.activeLoopAction.fadeOut(0.2);
-        next.reset();
-        if (desiredLoopState === 'idle' && ca.idleIsFallback) {
-          next.fadeIn(0.2).play();
-          const dur = next.getClip().duration;
-          next.time = dur > 0 ? dur * CHAR_IDLE_POSE_FRACTION : 0;
-          next.paused = true; // frozen pose — closest thing to standing still without a real idle clip
-        } else {
-          next.setLoop(THREE.LoopRepeat, Infinity);
-          next.fadeIn(0.2).play();
+    if (ca.shootT > 0) ca.shootT -= dt;
+    let want = desiredLoopState;
+    // The "shoot" clip is a standing aiming stance: it shows while standing still and firing; moving always wins.
+    if (want === 'idle' && ca.shootT > 0 && ca.actions.shoot) want = 'shoot';
+    if (ca.mode === 'oneshot') {
+      ca.osT += dt;
+      if (ca.oneshotKey !== 'dead') {
+        const moving = want === 'walk' || want === 'run';
+        if (want === 'kneel' || want === 'freefall' || (ca.osCancelOnMove && moving && ca.osT >= ca.osCancelAfter)) {
+          ca.mode = 'loop'; ca.oneshotKey = null; ca.loopState = null;   // the next state fades this action out
         }
-        ca.activeLoopAction = next;
       }
-      ca.loopState = desiredLoopState;
     }
+    if (ca.mode !== 'oneshot' && want && want !== ca.loopState) charEnterLoop(ca, want);
     ca.mixer.update(dt);
   }
 
+  // opts: durationSeconds (stretch the played part of the clip to this long), startAt (seconds into the clip),
+  //       cancelAfter + cancelOnMove (let walking/running cut it short after that many seconds), fade
   function triggerCharOneShot(ca, key, opts) {
-    if (!ca || !ca.actions[key]) return;
+    if (!ca) return;
     opts = opts || {};
+    // "shoot" is not a one-off in this export: it is a long aiming stance that shows while firing (see tickCharAnim)
+    if (key === 'shoot') { ca.shootT = CHAR_SHOOT_HOLD; return; }
     const act = ca.actions[key];
-    act.reset();
-    act.setLoop(THREE.LoopOnce, 1);
-    act.clampWhenFinished = !!opts.clampLast;
+    if (!act) return;
     const clipDur = act.getClip().duration;
-    act.timeScale = (opts.durationSeconds && clipDur > 0) ? (clipDur / opts.durationSeconds) : 1;
-    if (ca.activeLoopAction && ca.activeLoopAction !== act) ca.activeLoopAction.fadeOut(0.1);
-    act.fadeIn(0.1).play();
-    ca.mode = 'oneshot';
-    ca.oneshotKey = key;
+    let startAt = opts.startAt || 0;
+    if (opts.startAt === undefined) {
+      if (key === 'dead' && ca.loopState === 'kneel' && clipDur > CHAR_DEAD_FROM_KNEEL + 0.5) startAt = CHAR_DEAD_FROM_KNEEL;
+      if (key === 'arise' && clipDur > CHAR_ARISE_START + 0.5) startAt = CHAR_ARISE_START;
+    }
+    const span = Math.max(0.05, clipDur - startAt);
+    const timeScale = (opts.durationSeconds && clipDur > 0) ? (span / opts.durationSeconds) : 1;
+    charPlay(ca, key, { loop: THREE.LoopOnce, clamp: true, startAt, timeScale, fade: opts.fade === undefined ? 0.1 : opts.fade });
+    ca.mode = 'oneshot'; ca.oneshotKey = key; ca.osT = 0;
+    ca.osCancelAfter = opts.cancelAfter || 0; ca.osCancelOnMove = !!opts.cancelOnMove;
+    ca.introAction = null; ca.introNext = null;
   }
 
   function computePlayerLoopState() {
-    if (!player.alive || player.downed) return null; // death / being downed is handled purely by the one-shot 'dead' trigger
-    if (drop.active) return 'idle'; // no dedicated skydive/parachute clip — hold a neutral pose while airborne
-    if (player.crouching) return player.moving ? 'crouchWalk' : 'crouch';
+    if (!player.alive) return null;            // death is handled purely by the one-shot 'dead' trigger
+    if (player.downed) return 'kneel';         // online: down and waiting for a teammate to revive you
+    if (drop.active) return (player.falling && !player.chuteOpen) ? 'freefall' : 'idle';   // diving = freefall pose; plane / parachute = standing
+    if (player.crouching) return 'crouch';     // this export has no walk-while-crouched clip, so a moving crouch uses the crouch pose
     if (player.moving) return player.sprinting ? 'run' : 'walk';
+    if (mpMatch.active && mpRv.target !== null) return 'revive';   // holding the revive button next to a downed teammate
     return 'idle';
   }
 
@@ -4451,9 +4623,302 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     for (const bot of activeEnemies()) {
       if (!bot.charAnim) continue;
       const dx = bot.group.position.x - camPos.x, dz = bot.group.position.z - camPos.z;
-      if ((dx * dx + dz * dz) > CHAR_SHADOW_RANGE_SQ) continue; // far enough that a frozen pose for a frame is imperceptible — reuses the shadow LOD's own range
-      tickCharAnim(bot.charAnim, bot.moving ? 'run' : 'idle', dt);
+      if ((dx * dx + dz * dz) > CHAR_SHADOW_RANGE_SQ) continue; // far enough that a frozen pose for a frame is imperceptible - reuses the shadow LOD's own range
+      tickCharAnim(bot.charAnim, bot.falling ? (bot.chuteOpen ? 'idle' : 'freefall') : (bot.moving ? 'run' : 'idle'), dt);
     }
+  }
+
+  // ---------- Red Aura skill ----------
+  // A once-a-minute power-up. Press the AURA button (or T on a keyboard):
+  //   0.0 s  the soldier plays the "Skill 1" pose; you cannot move, jump or fire,
+  //   0.5 s  a burst of red particles and the aura starts - you can move again,
+  //   0.7 s  the protection ends (nothing can damage you from the press until here:
+  //          the 0.5 s you are frozen plus 0.2 s to get moving),
+  //  10.5 s  the aura ends (10 s of power).
+  // While it lasts you deal +10% damage and move +10% faster, and everybody in an
+  // online match sees the aura on you. The cooldown is counted from the press.
+  const AURA_COOLDOWN_S = 60;
+  const AURA_POWER_S = 10;
+  const AURA_WINDUP_S = 0.5;
+  const AURA_INVULN_S = 0.7;
+  const AURA_DAMAGE_MULT = 1.10;
+  const AURA_SPEED_MULT = 1.10;
+  const aura = { phase: 'idle', t: 0, cd: 0 };     // phase: 'idle' | 'windup' | 'power'; t = seconds since the press; cd = cooldown left
+
+  function auraLocked() { return aura.phase === 'windup'; }                                   // frozen: no moving, jumping or firing
+  function auraInvulnerable() { return aura.phase !== 'idle' && aura.t < AURA_INVULN_S; }
+  function auraDamageMult() { return aura.phase === 'power' ? AURA_DAMAGE_MULT : 1; }
+  function auraSpeedMult() { return aura.phase === 'power' ? AURA_SPEED_MULT : 1; }
+  function auraCanUse() {
+    return matchStarted && aura.phase === 'idle' && aura.cd <= 0 && player.alive && !player.downed && player.grounded
+      && !drop.active && !player.inCar && !matchWon && !layoutEditMode && !deathCam.active && player.ragdollTimeLeft <= 0
+      && !invOpen && !settingsOpen;
+  }
+  function auraActivate() {
+    if (!auraCanUse()) return;
+    aura.phase = 'windup'; aura.t = 0; aura.cd = AURA_COOLDOWN_S;
+    firing = false;
+    const fb = document.getElementById('fireBtn'); if (fb) fb.classList.remove('engaged');
+    if (isScoped) endScope();
+    if (mpMatch.active) mpReviveInterrupt();
+    triggerCharOneShot(player.charAnim, 'skill', { cancelAfter: AURA_WINDUP_S, cancelOnMove: true });
+    playAuraSound('charge');
+  }
+  function auraEnd() { aura.phase = 'idle'; aura.t = 0; }                                       // the cooldown keeps running
+  function auraReset() { aura.phase = 'idle'; aura.t = 0; aura.cd = 0; auraFxStopAll(); }
+
+  // ----- sound (same tiny WebAudio style as the other effects) -----
+  function playAuraSound(kind) {
+    const ctx = ensureAudio();
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    if (kind === 'charge') {
+      const o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(70, t); o.frequency.exponentialRampToValueAtTime(320, t + 0.5);
+      f.type = 'lowpass'; f.frequency.setValueAtTime(400, t); f.frequency.exponentialRampToValueAtTime(2400, t + 0.5);
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.16, t + 0.45); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
+      o.connect(f); f.connect(g); g.connect(ctx.destination);
+      o.start(t); o.stop(t + 0.62);
+    } else {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(120, t); o.frequency.exponentialRampToValueAtTime(36, t + 0.5);
+      g.gain.setValueAtTime(0.5, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.55);
+      o.connect(g); g.connect(ctx.destination);
+      o.start(t); o.stop(t + 0.6);
+      const len = Math.floor(ctx.sampleRate * 0.5);
+      const buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2);
+      const n = ctx.createBufferSource(), ng = ctx.createGain(), nf = ctx.createBiquadFilter();
+      n.buffer = buf; nf.type = 'lowpass'; nf.frequency.value = 1800; ng.gain.value = 0.28;
+      n.connect(nf); nf.connect(ng); ng.connect(ctx.destination);
+      n.start(t);
+    }
+  }
+
+  // ----- particles -----
+  // Per character that has the aura: two layers of red points (small bright embers + big
+  // soft puffs), a flat shockwave ring on the ground, a ground glow and a soft halo behind
+  // the body. Particles live in world space, so they trail behind a running character.
+  // Normal (not additive) blending is used on purpose: many overlapping additive particles
+  // saturate to yellow-white, and additive red on green grass turns orange, while normal
+  // blending keeps them red over any ground. Everything is created lazily and re-used.
+  let auraTexCache = null;
+  function auraTex() {
+    if (auraTexCache) return auraTexCache;
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const g = c.getContext('2d');
+    const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.35, 'rgba(255,255,255,0.55)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+    auraTexCache = new THREE.CanvasTexture(c);
+    auraTexCache.colorSpace = THREE.SRGBColorSpace;
+    return auraTexCache;
+  }
+  function auraMakeLayer(n, size) {
+    const geo = new THREE.BufferGeometry();
+    const pos = new Float32Array(n * 3), col = new Float32Array(n * 4);       // colour is r,g,b,alpha per particle
+    for (let i = 0; i < n; i++) pos[i * 3 + 1] = -1000;
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 4).setUsage(THREE.DynamicDrawUsage));
+    const mat = new THREE.PointsMaterial({ size, map: auraTex(), vertexColors: true, transparent: true, depthWrite: false, blending: THREE.NormalBlending, sizeAttenuation: true, fog: false, toneMapped: false });
+    const pts = new THREE.Points(geo, mat);
+    pts.frustumCulled = false; pts.renderOrder = 6; pts.visible = false;
+    scene.add(pts);
+    return { n, geo, pts, pos, col, vel: new Float32Array(n * 3), life: new Float32Array(n), max: new Float32Array(n), next: 0, acc: 0, alive: 0 };
+  }
+  function auraSlot(L) {
+    for (let k = 0; k < L.n; k++) { const i = (L.next + k) % L.n; if (L.life[i] <= 0) { L.next = (i + 1) % L.n; return i; } }
+    const i = L.next; L.next = (i + 1) % L.n; return i;     // pool full: recycle the oldest
+  }
+  function auraSpawn(L, x, y, z, vx, vy, vz, life) {
+    const i = auraSlot(L), i3 = i * 3;
+    L.pos[i3] = x; L.pos[i3 + 1] = y; L.pos[i3 + 2] = z;
+    L.vel[i3] = vx; L.vel[i3 + 1] = vy; L.vel[i3 + 2] = vz;
+    L.life[i] = life; L.max[i] = life;
+  }
+  function auraStepLayer(L, dt, ember) {
+    const pos = L.pos, col = L.col, vel = L.vel, life = L.life, max = L.max;
+    const drag = Math.max(0, 1 - 1.6 * dt), rise = (ember ? 0.7 : 0.3) * dt;
+    const sw = ember ? 2.2 * dt : 0, cs = Math.cos(sw), sn = Math.sin(sw);
+    let alive = 0;
+    for (let i = 0; i < L.n; i++) {
+      let l = life[i];
+      if (l <= 0) continue;
+      l -= dt;
+      const i3 = i * 3;
+      const i4 = i * 4;
+      if (l <= 0) { life[i] = 0; pos[i3 + 1] = -1000; col[i4 + 3] = 0; continue; }
+      life[i] = l; alive++;
+      const vx = vel[i3] * drag, vz = vel[i3 + 2] * drag;
+      vel[i3] = vx * cs - vz * sn; vel[i3 + 2] = vx * sn + vz * cs;      // the swirl: a slow turn of the sideways velocity
+      vel[i3 + 1] += rise;
+      pos[i3] += vel[i3] * dt; pos[i3 + 1] += vel[i3 + 1] * dt; pos[i3 + 2] += vel[i3 + 2] * dt;
+      const f = l / max[i];                                              // 1 -> 0 over its life
+      if (ember) {                                                       // bright red-orange when born, deeper red as it fades
+        col[i4] = 1; col[i4 + 1] = 0.005 + 0.035 * f * f; col[i4 + 2] = 0.005; col[i4 + 3] = Math.min(1, f * 1.8) * 0.95;
+      } else {                                                           // big dark-red puffs that fade in and out - they make the red haze
+        col[i4] = 0.8; col[i4 + 1] = 0.006 + 0.012 * f; col[i4 + 2] = 0.008; col[i4 + 3] = 0.34 * Math.min(1, (1 - f) * 5) * Math.min(1, f * 2);
+      }
+    }
+    L.alive = alive;
+    L.pts.visible = alive > 0;
+    L.geo.attributes.position.needsUpdate = true; L.geo.attributes.color.needsUpdate = true;
+  }
+  const AURA_RED = 0xff1a0f;
+  function auraNewFx() {
+    const flat = (extra) => new THREE.MeshBasicMaterial(Object.assign({ color: AURA_RED, transparent: true, opacity: 0, depthWrite: false, fog: false, toneMapped: false }, extra));
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.84, 1.0, 56), flat({ side: THREE.DoubleSide }));
+    ring.rotation.x = -Math.PI / 2; ring.visible = false; ring.renderOrder = 5; scene.add(ring);
+    const glow = new THREE.Mesh(new THREE.CircleGeometry(1.9, 40), flat({ map: auraTex() }));
+    glow.rotation.x = -Math.PI / 2; glow.visible = false; glow.renderOrder = 5; scene.add(glow);
+    const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: auraTex(), color: AURA_RED, transparent: true, opacity: 0, depthWrite: false, fog: false, toneMapped: false }));
+    halo.scale.set(4.2, 5.0, 1); halo.visible = false; halo.renderOrder = 5; scene.add(halo);
+    return { embers: auraMakeLayer(560, 0.3), smoke: auraMakeLayer(200, 1.25), ring, glow, halo, t: 0, ringT: -1, level: 0 };
+  }
+  // Shockwave ring + a wide spray of embers and puffs: the moment the aura switches on.
+  function auraBurst(fx, p) {
+    fx.ringT = 0;
+    for (let i = 0; i < 200; i++) {
+      const a = Math.random() * 6.2832, s = 3 + Math.random() * 7;
+      auraSpawn(fx.embers, p.x, p.y + 0.2 + Math.random() * 1.4, p.z, Math.cos(a) * s, 0.5 + Math.random() * 3.5, Math.sin(a) * s, 0.5 + Math.random() * 0.6);
+    }
+    for (let i = 0; i < 80; i++) {
+      const a = Math.random() * 6.2832, s = 2 + Math.random() * 3.5;
+      auraSpawn(fx.smoke, p.x, p.y + 0.2 + Math.random() * 1.3, p.z, Math.cos(a) * s, 0.3 + Math.random() * 1.5, Math.sin(a) * s, 0.8 + Math.random() * 0.5);
+    }
+  }
+  // p = the character's feet position (any object with x, y, z); charge = gathering sparks during the 0.5 s wind-up
+  function auraFxUpdate(fx, dt, p, emitting, charge, firstPerson) {
+    fx.t += dt;
+    const E = fx.embers, S = fx.smoke;
+    if (emitting) {
+      E.acc += 260 * dt;
+      while (E.acc >= 1) {
+        E.acc -= 1;
+        const a = Math.random() * 6.2832;
+        const rad = firstPerson ? 0.8 + Math.random() * 0.8 : 0.3 + Math.random() * 0.95;
+        const h = Math.random() * (firstPerson ? 1.2 : 2.0);
+        auraSpawn(E, p.x + Math.cos(a) * rad, p.y + 0.05 + h, p.z + Math.sin(a) * rad,
+          Math.cos(a + 1.5708) * 1.3 + (Math.random() - 0.5) * 0.6, 0.4 + Math.random() * 1.5, Math.sin(a + 1.5708) * 1.3 + (Math.random() - 0.5) * 0.6, 0.6 + Math.random() * 0.8);
+      }
+      S.acc += 46 * dt;
+      while (S.acc >= 1) {
+        S.acc -= 1;
+        const a = Math.random() * 6.2832, rad = firstPerson ? 0.9 + Math.random() * 0.6 : 0.15 + Math.random() * 0.6;
+        auraSpawn(S, p.x + Math.cos(a) * rad, p.y + 0.1 + Math.random() * (firstPerson ? 1.0 : 1.4), p.z + Math.sin(a) * rad,
+          Math.cos(a) * 0.5, 0.3 + Math.random() * 0.7, Math.sin(a) * 0.5, 1.0 + Math.random() * 0.6);
+      }
+    } else if (charge) {
+      E.acc += 70 * dt;
+      while (E.acc >= 1) {
+        E.acc -= 1;
+        const a = Math.random() * 6.2832, rad = 1.4 + Math.random() * 0.7, h = Math.random() * 1.6;
+        auraSpawn(E, p.x + Math.cos(a) * rad, p.y + h, p.z + Math.sin(a) * rad, -Math.cos(a) * 3.8, 0.3, -Math.sin(a) * 3.8, 0.32);
+      }
+    }
+    auraStepLayer(E, dt, true);
+    auraStepLayer(S, dt, false);
+    // shockwave ring
+    if (fx.ringT >= 0) {
+      fx.ringT += dt;
+      const k = fx.ringT / 0.6;
+      if (k >= 1) { fx.ringT = -1; fx.ring.visible = false; }
+      else {
+        fx.ring.visible = true;
+        fx.ring.position.set(p.x, p.y + 0.06, p.z);
+        fx.ring.scale.setScalar(0.5 + 5.5 * k);
+        fx.ring.material.opacity = 0.95 * Math.pow(1 - k, 0.9);
+      }
+    }
+    // ground glow + halo: fade in while the aura is on, out when it ends
+    fx.level += ((emitting ? 1 : 0) - fx.level) * Math.min(1, dt * (emitting ? 8 : 4));
+    const lv = fx.level > 0.01;
+    fx.glow.visible = lv;
+    fx.halo.visible = lv && !firstPerson;
+    if (lv) {
+      const pulse = 0.85 + 0.15 * Math.sin(fx.t * 7);
+      fx.glow.position.set(p.x, p.y + 0.05, p.z);
+      fx.glow.scale.setScalar(0.9 + 0.1 * pulse);
+      fx.glow.material.opacity = 0.6 * fx.level * pulse;
+      fx.halo.position.set(p.x, p.y + 1.0, p.z);
+      fx.halo.material.opacity = 0.2 * fx.level * pulse;
+    }
+  }
+  function auraFxStop(fx) {
+    if (!fx) return;
+    for (const L of [fx.embers, fx.smoke]) { L.life.fill(0); L.acc = 0; L.alive = 0; L.pts.visible = false; }
+    fx.ring.visible = false; fx.glow.visible = false; fx.halo.visible = false; fx.ringT = -1; fx.level = 0;
+  }
+  let auraLocalFx = null;
+  function auraFxStopAll() {
+    auraFxStop(auraLocalFx);
+    try { for (const rp of mpMatch.remotes.values()) { auraFxStop(rp.auraFx); rp.auraOn = false; } } catch (e) { /* no online match yet */ }
+  }
+  // Teammates on other devices: called every frame with whether their pose says the aura is on.
+  function auraSetRemote(rp, on) {
+    if (on && !rp.auraFx) rp.auraFx = auraNewFx();
+    if (on && !rp.auraOn && rp.auraFx) { auraBurst(rp.auraFx, rp.group.position); }
+    rp.auraOn = on;
+  }
+  function auraDropRemote(rp) { if (rp.auraFx) { auraFxStop(rp.auraFx); } rp.auraOn = false; }
+
+  // ----- the HUD button -----
+  const auraBtnEl = document.getElementById('auraBtn');
+  const auraTextEl = auraBtnEl ? auraBtnEl.querySelector('.t') : null;
+  const auraVigEl = document.getElementById('auraVignette');
+  let auraUiKey = '';
+  function auraRefreshUI() {
+    if (!auraBtnEl) return;
+    const show = matchStarted;
+    let cls, label, p;
+    if (aura.phase !== 'idle') {
+      const left = Math.max(0, AURA_WINDUP_S + AURA_POWER_S - aura.t);
+      cls = 'active'; label = aura.phase === 'windup' ? '...' : String(Math.ceil(Math.min(AURA_POWER_S, left)));
+      p = Math.min(1, left / AURA_POWER_S);
+    } else if (aura.cd > 0) {
+      cls = 'cooling'; label = String(Math.ceil(aura.cd)); p = 1 - aura.cd / AURA_COOLDOWN_S;
+    } else {
+      cls = auraCanUse() ? 'ready' : 'locked';
+      label = isMobile ? 'AURA' : 'AURA<br>(' + codeToLabel(keyBindings.aura) + ')';
+      p = 1;
+    }
+    const key = show + '|' + cls + '|' + label + '|' + p.toFixed(2);
+    if (key === auraUiKey) return;
+    auraUiKey = key;
+    auraBtnEl.style.display = show ? 'flex' : 'none';
+    auraBtnEl.className = cls;
+    auraBtnEl.style.setProperty('--p', p.toFixed(3));
+    if (auraTextEl) auraTextEl.innerHTML = label;
+    if (auraVigEl) auraVigEl.classList.toggle('show', aura.phase === 'power');
+  }
+  bindTap(auraBtnEl, () => auraActivate());
+
+  // Called once per frame from the main loop, after the player has moved.
+  function auraTick(dt) {
+    // The cooldown only runs during an actual match (not while still in the plane).
+    if (aura.cd > 0 && matchStarted && !drop.active) aura.cd = Math.max(0, aura.cd - dt);
+    if (aura.phase !== 'idle') {
+      aura.t += dt;
+      if (!player.alive || player.downed) auraEnd();
+      else if (aura.phase === 'windup' && aura.t >= AURA_WINDUP_S) {
+        aura.phase = 'power';
+        if (!auraLocalFx) auraLocalFx = auraNewFx();
+        auraBurst(auraLocalFx, player.pos);
+        playAuraSound('burst');
+        addShake(0.45);
+      } else if (aura.phase === 'power' && aura.t >= AURA_WINDUP_S + AURA_POWER_S) auraEnd();
+    }
+    try {
+      if (auraLocalFx) auraFxUpdate(auraLocalFx, dt, player.pos, aura.phase === 'power', aura.phase === 'windup', viewMode === 'first');
+      if (mpMatch.active) {
+        for (const rp of mpMatch.remotes.values()) {
+          if (rp.auraFx) auraFxUpdate(rp.auraFx, dt, rp.group.position, !!rp.auraOn, false, false);
+        }
+      }
+      auraRefreshUI();
+    } catch (err) { console.error('[aura] frame error:', err); }
   }
 
   // ---------- Player ----------
@@ -6886,7 +7351,6 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
         bot.falling = false;
         bot.chuteGroup.visible = false;
         bot.target.copy(bot.pos);
-        triggerCharOneShot(bot.charAnim, 'arise', { clampLast: false });
       }
       bot.group.position.set(bot.pos.x, bot.pos.y, bot.pos.z);
       bot.healthSprite.quaternion.copy(camera.quaternion);
@@ -7379,7 +7843,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (hitBotRef) {
       showHitMarker(hitIsHead);
       playHitConfirm(hitIsHead);
-      const shownDmg = def.dmg * (hitIsHead ? def.headMult : 1);
+      const shownDmg = def.dmg * (hitIsHead ? def.headMult : 1) * auraDamageMult();
       if (def.oneShotHeadshot && hitIsHead) {
         hitBotRef.health = 0;
       } else {
@@ -7437,7 +7901,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
 
   function primaryAction() {
-    if (!player.alive || player.downed || drop.active || matchWon || player.ragdollTimeLeft > 0 || player.inCar) return;
+    if (!player.alive || player.downed || drop.active || matchWon || player.ragdollTimeLeft > 0 || player.inCar || auraLocked()) return;
     mpReviveInterrupt();                                          // online: shooting / swinging restarts the 20 s of a revive you were doing
     const now = performance.now();
     const melee = MELEE_DEFS[player.weapon];
@@ -7493,7 +7957,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
               showHitMarker(isHead);
               playHitConfirm(isHead);
             } else {
-              const dmgDealt = isHead ? melee.headDmg : melee.bodyDmg;
+              const dmgDealt = (isHead ? melee.headDmg : melee.bodyDmg) * auraDamageMult();
               botRef.health -= dmgDealt;
               updateHealthSprite(botRef);
               showHitMarker(isHead);
@@ -8110,6 +8574,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   function damagePlayer(amount, sourcePos, attackerInfo) {
     if (!player.alive) return;
     if (player.downed) return;                                    // online: a downed player takes no more damage (they bleed out instead)
+    if (auraInvulnerable()) return;                               // red aura skill: nothing can hurt you while it starts up
     if (cheatState.godMode) return;
     if (cheatState.autoDodge) { triggerPlayerDodge(sourcePos); return; }
     if (player.blocking && sourcePos) {
@@ -8362,7 +8827,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   bindTap(document.getElementById('deathCamSkipBtn'), endDeathCam);
   function respawnPlayer() {
     player.alive = true; player.downed = false; player.health = player.maxHealth;
-    if (player.charAnim) { player.charAnim.mode = 'loop'; player.charAnim.loopState = null; player.charAnim.activeLoopAction = null; }
+    if (player.charAnim) charResetState(player.charAnim);
+    auraReset();
     player.secondaryType = 'pistol';
     player.ammoState.secondary = { mag: 12, reserve: 36 };
     player.primaryType = null;
@@ -8762,7 +9228,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // (already handled separately by dropEnemyFlag when they died carrying it).
   function respawnPlayerCTF() {
     player.alive = true; player.downed = false; player.health = player.maxHealth;
-    if (player.charAnim) { player.charAnim.mode = 'loop'; player.charAnim.loopState = null; player.charAnim.activeLoopAction = null; }
+    if (player.charAnim) charResetState(player.charAnim);
+    auraReset();
     player.secondaryType = 'pistol';
     player.ammoState.secondary = { mag: 12, reserve: 36 };
     player.primaryType = null;
@@ -9397,14 +9864,14 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     jump: 'Space', crouch: 'KeyC', sprint: 'ShiftLeft', toggleView: 'KeyP', reload: 'KeyR',
     axe: 'Digit1', primary: 'Digit2', pistol: 'Digit3', melee: 'Digit4',
     build: 'KeyB', buildModeToggle: 'KeyN', buildPiece: 'KeyX', buildTier: 'KeyZ', drop: 'KeyG', grenade: 'KeyF', smokeGrenade: 'KeyV', molotov: 'KeyM', inventory: 'Tab', skipWave: 'KeyK',
-    enterCar: 'KeyE', revive: 'KeyQ'
+    enterCar: 'KeyE', revive: 'KeyQ', aura: 'KeyT'
   };
   const KEY_ACTION_LABELS = {
     forward: 'Move Forward', back: 'Move Back', left: 'Move Left', right: 'Move Right',
     jump: 'Jump', crouch: 'Crouch', sprint: 'Sprint', toggleView: 'Toggle View', reload: 'Reload',
     axe: 'Equip Axe', primary: 'Equip Primary', pistol: 'Equip Secondary', melee: 'Equip Melee',
     build: 'Build Piece', buildModeToggle: 'Toggle Build Mode', buildPiece: 'Cycle Piece Type', buildTier: 'Cycle Material', drop: 'Drop Weapon', grenade: 'Throw Grenade', smokeGrenade: 'Throw Smoke Grenade', molotov: 'Throw Molotov', inventory: 'Inventory', skipWave: 'Skip Wave',
-    enterCar: 'Enter/Exit Car', revive: 'Revive Teammate (hold)'
+    enterCar: 'Enter/Exit Car', revive: 'Revive Teammate (hold)', aura: 'Red Aura Skill'
   };
   let keyBindings = {};
   try { keyBindings = JSON.parse(localStorage.getItem('blazingice_keyBindings') || '{}'); } catch(e) { keyBindings = {}; }
@@ -10254,7 +10721,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   // position (however it's normally anchored — left/right/bottom/transform)
   // into a plain fixed left/top, then saving that as a % of the screen so it
   // still makes sense if the page is reopened at a different window size.
-  const LAYOUT_IDS = ['joystickZone','jumpBtn','crouchBtn','fireBtn','scopeBtn','reloadBtn','buildModeBtn','buildBtn','buildPieceBtn','buildTierBtn','weaponSwitchBtn','dropBtn','grenadeBtn','smokeGrenadeBtn','molotovBtn','equipBar','topRightBtns','skipWaveBtn'];
+  const LAYOUT_IDS = ['joystickZone','jumpBtn','crouchBtn','fireBtn','scopeBtn','reloadBtn','auraBtn','buildModeBtn','buildBtn','buildPieceBtn','buildTierBtn','weaponSwitchBtn','dropBtn','grenadeBtn','smokeGrenadeBtn','molotovBtn','equipBar','topRightBtns','skipWaveBtn'];
   const LAYOUT_LABELS = {
     joystickZone: 'MOVE',
     jumpBtn: 'JUMP',
@@ -10262,6 +10729,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     fireBtn: 'FIRE',
     scopeBtn: 'SCOPE',
     reloadBtn: 'RELOAD',
+    auraBtn: 'RED AURA SKILL',
     buildModeBtn: 'TOGGLE BUILD MODE',
     buildBtn: 'BUILD PIECE',
     buildPieceBtn: 'CYCLE PIECE TYPE',
@@ -10765,7 +11233,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       if (blockedByFriendlyFire(thrower, bot)) continue;
       const d = pos.distanceTo(bot.pos);
       if (d < RADIUS && hasLineOfSight(pos, bot.pos)) {
-        const dmg = MAXDMG * (1 - d / RADIUS);
+        const dmg = MAXDMG * (1 - d / RADIUS) * ((thrower && thrower.isPlayer) ? auraDamageMult() : 1);
         bot.health -= dmg;
         updateHealthSprite(bot);
         if (bot.health <= 0) killEnemy(bot, true);
@@ -10776,7 +11244,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
         if (!zom.alive) continue;
         const d = pos.distanceTo(zom.pos);
         if (d < RADIUS && hasLineOfSight(pos, zom.pos)) {
-          const dmg = MAXDMG * (1 - d / RADIUS);
+          const dmg = MAXDMG * (1 - d / RADIUS) * ((thrower && thrower.isPlayer) ? auraDamageMult() : 1);
           zom.health -= dmg;
           updateHealthSprite(zom);
           if (zom.health <= 0) killEnemy(zom, true);
@@ -10888,7 +11356,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (!cosmetic && mpMatch.active) mpFxHost('fire', pos, thrower);          // online: the others should see a bot's fire too
   }
   function applyFireDamage(fz) {
-    if (fz.cosmetic) return;                                                  // a copy drawn for a fire that really burns on the leader's device
+    if (fz.cosmetic) return;
+    const fireMult = (fz.thrower && fz.thrower.isPlayer) ? auraDamageMult() : 1;                                                  // a copy drawn for a fire that really burns on the leader's device
     const p = fz.group.position;
     if (mpMatch.active && !fz.noPlayerDamage) mpFireOnTeammates(p, fz.thrower);
     if (player.alive && !fz.noPlayerDamage && !blockedByFriendlyFire(fz.thrower, player)) {
@@ -10900,7 +11369,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       if (blockedByFriendlyFire(fz.thrower, bot)) continue;
       const d = Math.hypot(p.x - bot.pos.x, p.z - bot.pos.z);
       if (d < FIRE_RADIUS) {
-        bot.health -= FIRE_TICK_DMG;
+        bot.health -= FIRE_TICK_DMG * fireMult;
         updateHealthSprite(bot);
         if (bot.health <= 0) killEnemy(bot, true);
       }
@@ -10910,7 +11379,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
         if (!zom.alive) continue;
         const d = Math.hypot(p.x - zom.pos.x, p.z - zom.pos.z);
         if (d < FIRE_RADIUS) {
-          zom.health -= FIRE_TICK_DMG;
+          zom.health -= FIRE_TICK_DMG * fireMult;
           updateHealthSprite(zom);
           if (zom.health <= 0) killEnemy(zom, true);
         }
@@ -11002,6 +11471,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (e.code === keyBindings.inventory) { toggleInventory(); e.preventDefault(); }
     if (e.code === keyBindings.skipWave) skipWave();
     if (e.code === keyBindings.enterCar) tryEnterOrExitCar();
+    if (e.code === keyBindings.aura && !e.repeat) auraActivate();
   });
   window.addEventListener('keyup', (e) => {
     if (e.key === 'Meta') { clearAllKeys(); return; }
@@ -11028,9 +11498,9 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   window.addEventListener('contextmenu', clearAllKeys);
 
   function tryJump() {
-    if (player.grounded && player.alive && !player.downed && !drop.active) {
+    if (player.grounded && player.alive && !player.downed && !drop.active && !auraLocked()) {
       player.velY = 8; player.grounded = false;
-      triggerCharOneShot(player.charAnim, 'jump', { durationSeconds: 0.8 });
+      triggerCharOneShot(player.charAnim, 'jump', { durationSeconds: 1.3, cancelAfter: 0.75, cancelOnMove: true });
     }
   }
 
@@ -11682,7 +12152,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
   function mpBotTeamCount(teamSize) { return teamSize === 2 ? 24 : 15; }   // 2 players: 25 teams in total, 3 players: 16 teams
   function mpBotCount(teamSize) { return mpBotTeamCount(teamSize) * teamSize; }
-  const MPF = { MOVING: 1, SPRINT: 2, CROUCH: 4, ALIVE: 8, FALLING: 16, CHUTE: 32, FIRING: 64, INPLANE: 128, INCAR: 256, DOWNED: 512 };
+  const MPF = { MOVING: 1, SPRINT: 2, CROUCH: 4, ALIVE: 8, FALLING: 16, CHUTE: 32, FIRING: 64, INPLANE: 128, INCAR: 256, DOWNED: 512, SKILL: 1024, AURA: 2048, REVIVING: 4096 };
   function mpAngleLerp(a, b, t) {
     const TAU = Math.PI * 2;
     const d = ((((b - a + Math.PI) % TAU) + TAU) % TAU) - Math.PI;
@@ -11729,11 +12199,14 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
   }
   // Which animation clip a remote player should play.
   function mpAnimState(flags, speed) {
-    if (!(flags & MPF.ALIVE) || (flags & MPF.DOWNED)) return null;   // death / being downed is a one-shot clip handled separately
-    if (flags & (MPF.FALLING | MPF.CHUTE | MPF.INPLANE)) return 'idle';
+    if (!(flags & MPF.ALIVE)) return null;                           // death is a one-shot clip handled separately
+    if (flags & MPF.DOWNED) return 'kneel';
+    if (flags & MPF.FALLING) return (flags & MPF.CHUTE) ? 'idle' : 'freefall';
+    if (flags & (MPF.CHUTE | MPF.INPLANE)) return 'idle';
     const moving = (flags & MPF.MOVING) && speed > 0.25;
-    if (flags & MPF.CROUCH) return moving ? 'crouchWalk' : 'crouch';
+    if (flags & MPF.CROUCH) return 'crouch';
     if (moving) return (flags & MPF.SPRINT) ? 'run' : 'walk';
+    if (flags & MPF.REVIVING) return 'revive';
     return 'idle';
   }
   // Where each follower flies relative to the leader (slot 0 = leader), side by side.
@@ -11816,6 +12289,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     if (rp.chuteGroup) rp.chuteGroup.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
     if (rp.gunMesh) disposeMeshGeometriesOnly(rp.gunMesh);
     if (rp.charAnim && rp.charAnim.mixer) { rp.charAnim.mixer.stopAllAction(); rp.charAnim.mixer.uncacheRoot(rp.charAnim.model); }
+    auraDropRemote(rp);
     mpMatch.remotes.delete(id);
   }
   function mpClearRemotes() { for (const id of [...mpMatch.remotes.keys()]) mpRemoveRemote(id); }
@@ -11936,9 +12410,12 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     rp.group.rotation.y = o.yaw;
     const alive = (o.flags & MPF.ALIVE) !== 0;
     if (rp.alive && !alive) { rp.alive = false; triggerCharOneShot(rp.charAnim, 'dead', { clampLast: true }); }
-    const downed = alive && (o.flags & MPF.DOWNED) !== 0;          // lying on the ground, waiting to be revived
-    if (downed && !rp.downed) triggerCharOneShot(rp.charAnim, 'dead', { clampLast: true });
-    else if (!downed && rp.downed && alive) mpCharStandUp(rp.charAnim);
+    const downed = alive && (o.flags & MPF.DOWNED) !== 0;          // kneeling on the ground, waiting to be revived (the kneel pose itself comes from mpAnimState)
+    if (!downed && rp.downed && alive) mpCharStandUp(rp.charAnim);
+    const skillOn = alive && (o.flags & MPF.SKILL) !== 0;          // the red aura wind-up: play the Skill pose once when it starts
+    if (skillOn && !rp.skillOn) triggerCharOneShot(rp.charAnim, 'skill', { cancelAfter: AURA_WINDUP_S, cancelOnMove: true });
+    rp.skillOn = skillOn;
+    auraSetRemote(rp, alive && !downed && (o.flags & MPF.AURA) !== 0);
     rp.downed = downed; rp.downTag.visible = downed;
     if (rp.charAnim) tickCharAnim(rp.charAnim, mpAnimState(o.flags, o.speed), dt);
     rp.proxy.pos.set(o.x, o.y, o.z); rp.proxy.alive = rp.alive && !downed && !(o.flags & MPF.INPLANE);       // bots ignore a downed teammate
@@ -12081,6 +12558,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       if (player.moving) f |= MPF.MOVING; if (player.sprinting) f |= MPF.SPRINT; if (player.crouching) f |= MPF.CROUCH;
       if (player.alive) f |= MPF.ALIVE; if (player.falling) f |= MPF.FALLING; if (player.chuteOpen) f |= MPF.CHUTE;
       if (firing) f |= MPF.FIRING; if (drop.active && !player.falling) f |= MPF.INPLANE; if (player.inCar) f |= MPF.INCAR; if (player.downed) f |= MPF.DOWNED;
+      if (aura.phase === 'windup') f |= MPF.SKILL; if (aura.phase === 'power') f |= MPF.AURA;        // red aura skill: teammates play the pose and draw the aura
+      if (mpRv.target !== null && player.alive && !player.downed) f |= MPF.REVIVING;               // holding the revive button on a downed teammate
       const r2 = (v) => Math.round(v * 100) / 100;
       mpSend({ t: 'p', d: [r2(player.pos.x), r2(player.pos.y), r2(player.pos.z), r2(player.yaw), r2(player.pitch), f, Math.max(0, Math.round(player.health)), Math.round(now - mpMatch.t0), mpWeaponIndex(currentMeshType())] });
     }
@@ -12527,11 +13006,10 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     for (const al of mpMatch.awayAlive.values()) if (al) return true;                          // somebody who lost connection may still come back
     return false;
   }
-  function mpCharStandUp(ca) {                                                                  // from lying down back to the normal animations
+  function mpCharStandUp(ca) {                                                                  // from kneeling (downed) back to the normal animations
     if (!ca) return;
-    if (ca.actions.dead) ca.actions.dead.stop();
-    ca.mode = 'loop'; ca.loopState = null; ca.activeLoopAction = null; ca.oneshotKey = null;
-    if (ca.actions.arise) triggerCharOneShot(ca, 'arise', { clampLast: false });
+    if (ca.oneshotKey === 'dead') charResetState(ca);
+    triggerCharOneShot(ca, 'arise', { cancelAfter: 0.5, cancelOnMove: true, fade: 0.2 });
   }
   function mpGoDown() {                                                                          // returns true when the player went down instead of dying
     if (!mpMatch.active || mpMatch.over || mpMatch.phase !== 'playing' || player.downed || !mpHasStandingTeammate()) return false;
@@ -12540,7 +13018,6 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
     mpReviveInterrupt();
     firing = false; document.getElementById('fireBtn').classList.remove('engaged');
     endScope();
-    triggerCharOneShot(player.charAnim, 'dead', { clampLast: true });
     mpNotice('You are down! A teammate can revive you.', 4000);
     return true;
   }
@@ -13063,7 +13540,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       return;
     }
     let inputX = 0, inputZ = 0;
-    if (!invOpen && !layoutEditMode) {
+    if (!invOpen && !layoutEditMode && !auraLocked()) {
       if (keys[keyBindings.forward]) inputZ += 1;
       if (keys[keyBindings.back]) inputZ -= 1;
       if (keys[keyBindings.right]) inputX += 1;
@@ -13112,8 +13589,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
       move.addScaledVector(forward, inputZ);
       move.addScaledVector(right, inputX);
       if (move.lengthSq() > 0) move.normalize();
-      player.pos.x += move.x * player.speed * speedMult * cheatState.speedMult * dt;
-      player.pos.z += move.z * player.speed * speedMult * cheatState.speedMult * dt;
+      player.pos.x += move.x * player.speed * speedMult * cheatState.speedMult * auraSpeedMult() * dt;
+      player.pos.z += move.z * player.speed * speedMult * cheatState.speedMult * auraSpeedMult() * dt;
       playerGroup.rotation.y = player.yaw;
     }
     tickPlayerDodge(dt);
@@ -13478,6 +13955,7 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
       updateDrop(dt);
       updateMovement(dt);
+      auraTick(dt);
       mpMatchTick(dt);
       updateCarProximity();
       if (!drop.active && matchStarted) {
