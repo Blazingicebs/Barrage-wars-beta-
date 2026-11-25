@@ -191,3 +191,6 @@ Fully implemented multiplayer and added ping counter
 
 Update 0.69 - *Commited by Blazingice on 24 Nov 2026*
 Added soldier.glb, added aura power that boosts dmg and speed by 10%.
+
+
+Warning: This game is serverly unoptimised, please wait while we find the reason the game is veery laggy, for now u will need an rtx 5090 and amd ryzen 9 9850x3d2 with 64gb of ddr5 ram to run at 60fps, hold on
